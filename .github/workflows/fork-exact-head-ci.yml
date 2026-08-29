@@ -1,0 +1,106 @@
+name: Fork exact-head CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact fork commit SHA to verify
+        required: true
+        type: string
+      suite:
+        description: Focused publication suite
+        required: true
+        type: choice
+        options:
+          - kanban-review
+          - cron-liveness
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-exact-head-${{ inputs.target_sha }}-${{ inputs.suite }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify ${{ inputs.suite }} at exact head
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      OPENROUTER_API_KEY: ""
+      OPENAI_API_KEY: ""
+      NOUS_API_KEY: ""
+    steps:
+      - name: Validate owner and exact suite/head pair
+        env:
+          ACTOR: ${{ github.actor }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          SUITE: ${{ inputs.suite }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTOR" != "Rook-CodeVolt" ]; then
+            echo "Only the fork owner may dispatch this verification workflow" >&2
+            exit 2
+          fi
+          case "$SUITE:$TARGET_SHA" in
+            kanban-review:daa93cd79e9e00a41dcfa088cdf8010332795996) ;;
+            cron-liveness:deb48ae78c23a8867c52b7d5099bcaba206af995) ;;
+            *)
+              echo "suite and target_sha are not an admitted exact-head pair" >&2
+              exit 2
+              ;;
+          esac
+
+      - name: Checkout exact head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.target_sha }}
+          persist-credentials: false
+
+      - name: Prove exact identity
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: false
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install locked test environment
+        run: >-
+          uv sync --locked --python 3.11
+          --extra all --extra dev --extra anthropic --extra mistral
+          --extra fal --extra modal --extra daytona --extra hindsight
+          --extra parallel-web
+
+      - name: Run Kanban review publication surface
+        if: inputs.suite == 'kanban-review'
+        run: |
+          uv run python -m pytest -q \
+            tests/agent/test_system_prompt.py \
+            tests/hermes_cli/test_kanban_core_functionality.py \
+            tests/hermes_cli/test_kanban_review_lifecycle.py \
+            tests/tools/test_kanban_tools.py
+
+      - name: Run cron publication surface
+        if: inputs.suite == 'cron-liveness'
+        run: |
+          uv run python -m pytest -q \
+            tests/cron/test_87033_cronjob_gateway_liveness.py \
+            tests/hermes_cli/test_cron.py \
+            tests/cron/test_cron_profile_isolation.py \
+            tests/cron/test_scheduler_provider.py
+
+      - name: Run Ruff
+        run: uvx ruff@0.15.10 check .
+
+      - name: Verify clean checkout
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain)"
