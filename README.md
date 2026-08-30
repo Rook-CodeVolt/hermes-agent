@@ -2,6 +2,15 @@
   <img src="assets/banner.png" alt="Hermes Agent" width="100%">
 </p>
 
+> [!IMPORTANT]
+> **This is the public `Rook-CodeVolt/hermes-agent` fork, not the upstream
+> `NousResearch/hermes-agent` repository.** It has no separate release or
+> support programme. Read [Fork stewardship](FORK_STEWARDSHIP.md) before using
+> or contributing to this fork. Report fork-only vulnerabilities through the
+> fork's [private vulnerability-reporting form](https://github.com/Rook-CodeVolt/hermes-agent/security/advisories/new);
+> use the upstream routes below and in [SECURITY.md](SECURITY.md) for upstream
+> Hermes Agent support, releases, and security issues.
+
 # Hermes Agent ☤
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/">Hermes Agent</a> | <a href="https://hermes-agent.nousresearch.com/">Hermes Desktop</a>
