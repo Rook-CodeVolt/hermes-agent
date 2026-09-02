@@ -251,7 +251,7 @@ def _yaml(rel: str) -> dict:
 
 def test_every_lane_reaches_the_composite_action():
     """The action is the one surface every consumer reads, so it must carry all
-    of them — ci-fork.yaml, nix.yml and docker.yml each re-export a different subset.
+    of them — ci.yaml, nix.yml and docker.yml each re-export a different subset.
     """
     lanes = set(classify(["run_agent.py"]))
     action_outputs = set(_yaml(".github/actions/detect-changes/action.yml")["outputs"])
@@ -264,10 +264,10 @@ def test_ci_jobs_only_gate_on_detect_outputs_that_detect_actually_declares():
     The lane then reports "skipping" on every PR, forever, and nothing goes red
     — there is no error for referencing an output a job never declared. That is
     exactly how the ``rust`` lane shipped dead: the classifier emitted it and
-    the composite action re-exported it, but ci-fork.yaml's ``detect`` job did not,
+    the composite action re-exported it, but ci.yaml's ``detect`` job did not,
     so ``needs.detect.outputs.rust`` was never anything but "".
     """
-    ci = _yaml(".github/workflows/ci-fork.yaml")
+    ci = _yaml(".github/workflows/ci.yaml")
     declared = set(ci["jobs"]["detect"]["outputs"])
 
     referenced: set[str] = set()
