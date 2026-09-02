@@ -1,7 +1,8 @@
 name: CI
 
 # Contribution-fork workflow identity. Keep content aligned with upstream's
-# ci.yaml; this distinct path isolates fork-local Actions startup failures.
+# ci.yaml; this distinct path isolates repository-specific Actions workflow
+# identity failures in this contribution fork.
 
 # Orchestrator workflow. Runs ``detect-changes`` once, then conditionally
 # calls the sub-workflows that a PR can actually affect. A final
