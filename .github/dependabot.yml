@@ -4,7 +4,7 @@
 # Routine version-update pull requests are therefore disabled here. The
 # repository's separately configured Dependabot alerts and security updates
 # remain enabled so vulnerability findings and security-update coverage are
-# retained.
+# retained. No source-dependency ecosystems are configured in this fork.
 
 version: 2
 updates:
