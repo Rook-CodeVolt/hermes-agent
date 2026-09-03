@@ -26,9 +26,17 @@ def test_required_pull_request_lanes_use_standard_hosted_runners() -> None:
         unavailable_runner = LARGER_RUNNER.search(workflow)
         assert unavailable_runner is None, (
             f"{relative_path} still requests unavailable runner "
-            f"{unavailable_runner.group(0) if unavailable_runner else ''}"
+            f"{unavailable_runner.group(0)}"
         )
         assert runner_line in workflow_lines, (
             f"{relative_path} must use the standard hosted runner available "
             "to this contribution fork"
         )
+
+    python_workflow = (ROOT / ".github/workflows/tests.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "HERMES_TEST_WORKERS: 96" not in python_workflow
+    assert 'HERMES_TEST_WORKERS="$(python -c' in python_workflow
+    assert "process_cpu_count" in python_workflow
+    assert "export HERMES_TEST_WORKERS" in python_workflow
