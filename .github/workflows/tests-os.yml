@@ -39,7 +39,7 @@ jobs:
   os-tests:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
@@ -47,9 +47,12 @@ jobs:
           - name: macOS-only tests
             runner: macos-latest
             marker: macos_only
+            timeout: 30
           - name: Windows-only tests
-            runner: windows-latest-32-core
+            # The upstream 32-core label is unavailable to personal forks.
+            runner: windows-latest
             marker: windows_only
+            timeout: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

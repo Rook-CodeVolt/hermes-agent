@@ -98,6 +98,22 @@ Every fork pull request must:
 Missing or contradicted ownership, security-route, divergence, license,
 rollback, or public-data evidence blocks acceptance.
 
+## Fork CI runner policy
+
+Required pull-request checks use standard GitHub-hosted runner labels available
+to this public personal fork. Upstream larger-runner labels such as
+`ubuntu-latest-96-core`, `ubuntu-latest-32-core`, and
+`windows-latest-32-core` are not provisioned here and must not be used by the
+required Python, JavaScript, Rust, Windows, or Nix lanes. A static regression
+test enforces this fork boundary. Standard runners may take longer, but a slower
+bounded check is preferable to an unavailable runner that remains queued. The
+first live fork run measures the resulting durations; the Python lane has a
+90-minute bound, the Nix cache-miss lane a 120-minute bound, and the JavaScript,
+Rust, and Windows lanes 60-minute bounds. Restore bounded sharding rather than a
+larger-runner dependency if a limit proves insufficient. The Python test lane
+derives its file-level worker count from the assigned runner instead of
+retaining the upstream fixed 96-worker setting.
+
 ## Rollback and retirement
 
 Rollback for a documentation-only change is a normal revert of the exact
