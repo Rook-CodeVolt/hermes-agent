@@ -54,22 +54,25 @@ Choose the reporting route by where the affected behaviour originates:
 
 ## Current divergence and upstream sync record
 
-This inventory was reviewed on **2026-08-30 at 08:56 UTC**:
+This inventory was reviewed on **2026-09-03 at 10:06 UTC**:
 
 | Item | Exact reviewed state |
 | --- | --- |
-| Fork default branch | `main` at `bb626db42b076ef2709e38c2a729ab1d4367cf0a` |
-| Fork main tree | `2c7f2d667ecb508dfb07474ef867ee21b88ea47d` |
+| Fork default branch | `main` at `8178548437d63a2357fce98fa0b76d560d720713` |
+| Fork main tree | `841fba346379142226146eda47f199d05e563ef5` |
 | Last inherited upstream sync point (current merge base) | `3f36c87e1ebdfbf7d14a88229dc9be222c12ea89` |
-| Upstream `main` head reviewed for sync | `2a598aad1c398e95b3325a0f100f5c28efa63d12` |
-| Divergence at review | 1 fork-only commit; 129 upstream-only commits |
+| Upstream `main` head reviewed for sync | `561b053f794a1781868bb032029d589c67708119` |
+| Divergence at review | 3 fork-only commits; 1,414 upstream-only commits |
 
-The sole fork-only commit at that baseline is
+The fork-only history at that baseline comprises the exact-head verification
+workflow in
 [`bb626db42b076ef2709e38c2a729ab1d4367cf0a`](https://github.com/Rook-CodeVolt/hermes-agent/commit/bb626db42b076ef2709e38c2a729ab1d4367cf0a),
-which adds
-[`.github/workflows/fork-exact-head-ci.yml`](.github/workflows/fork-exact-head-ci.yml).
-The workflow is fork-only exact-head verification infrastructure; it is not an
-upstream workflow, release signal, or product-support commitment.
+the stewardship documentation in
+[`41ba5fbcc6ef6d4e8aefb529e2675e763ee6454c`](https://github.com/Rook-CodeVolt/hermes-agent/commit/41ba5fbcc6ef6d4e8aefb529e2675e763ee6454c),
+and merge commit
+[`8178548437d63a2357fce98fa0b76d560d720713`](https://github.com/Rook-CodeVolt/hermes-agent/commit/8178548437d63a2357fce98fa0b76d560d720713).
+These are fork-only stewardship changes, not upstream workflows, release
+signals, or product-support commitments.
 
 This is a point-in-time record, not a claim that the fork is synchronized.
 Before any sync, fetch both repositories and re-read the exact heads, merge
@@ -95,8 +98,32 @@ Every fork pull request must:
 - remain draft and unmerged until an independent reviewer validates the exact
   head. Passing automation is evidence, not acceptance or release authority.
 
+Independent review does not require an external collaborator. A fresh model
+review may satisfy the review gate when it receives the complete exact diff in
+an isolated, non-persistent, read-only execution with no repository credentials
+or write, merge, or deployment capability. Its structured verdict must bind the
+exact head, retain findings and limitations, and be preserved by digest. The
+fork owner or constrained broker verifies freshness and applies any review
+label; the model cannot approve its own mutation or authorise merge. Higher-risk
+security, production, release, or irreversible changes require a separate human
+or dual-model escalation.
+
 Missing or contradicted ownership, security-route, divergence, license,
 rollback, or public-data evidence blocks acceptance.
+
+## Fork CI runner policy
+
+Required pull-request checks use standard GitHub-hosted runner labels available
+to this public personal fork. Upstream larger-runner labels such as
+`ubuntu-latest-96-core`, `ubuntu-latest-32-core`, and
+`windows-latest-32-core` are not provisioned here and must not be used by the
+required Python, JavaScript, Rust, Windows, or Nix lanes. A static regression
+test enforces this fork boundary. Standard runners may take longer, but a slower
+bounded check is preferable to an unavailable runner that remains queued. The
+first live fork run measures the resulting durations; the Python lane has a
+90-minute bound, the Nix cache-miss lane a 120-minute bound, and the JavaScript,
+Rust, and Windows lanes 60-minute bounds. Restore bounded sharding rather than a
+larger-runner dependency if a limit proves insufficient.
 
 ## Rollback and retirement
 
