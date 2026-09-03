@@ -1,0 +1,11 @@
+# Commit-specific privacy exceptions for the contributor attribution gate.
+#
+# Each line is a reviewed commit ID whose historical author address must not
+# be copied into the current tree. Do not add addresses to this file. Adding
+# an exception changes a CI trust boundary and requires independent review.
+5ce4a08b31716c52f6d2b7ef95edffaf7b6c1ecc
+59d89d9fbeb147414f820d1532d6d8a733da37de
+e836cba0ee18f5e04d02762cd7df6ef26b4c3083
+2ec73f78b00bb480345e987598397543bc934e40
+4d6813e175c1bcb10b725d0082aaf4563cc2ca3d
+8dcd52ff196336990b32434c6157b1bfeaeee3f3

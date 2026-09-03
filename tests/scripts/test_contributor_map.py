@@ -18,6 +18,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import release  # noqa: E402
+import audit_pr_attribution  # noqa: E402
 from add_contributor import add_contributor, read_mapping_file  # noqa: E402
 
 
@@ -44,6 +45,40 @@ def test_effective_map_merges_legacy_and_directory():
     )
     for email, login in release._load_contributor_dir().items():
         assert release.AUTHOR_MAP[email] == login
+
+
+# ── attribution privacy exceptions ───────────────────────────────────
+
+
+def test_audit_excludes_only_listed_commit_ids(tmp_path, monkeypatch):
+    contributors = tmp_path / "contributors"
+    contributors.mkdir()
+    (contributors / "attribution-privacy-exceptions").write_text(
+        "# reviewed privacy exception\nexcluded-sha\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(audit_pr_attribution, "REPO_ROOT", tmp_path)
+
+    def fake_run(*args, **kwargs):
+        if "merge-base" in args:
+            return "base-sha"
+        return "excluded-sha\tprivate@example.com\nkept-sha\tkept@example.com"
+
+    monkeypatch.setattr(audit_pr_attribution, "run", fake_run)
+
+    assert audit_pr_attribution.new_emails() == ["kept@example.com"]
+
+
+def test_audit_uses_all_commit_emails_without_exception_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(audit_pr_attribution, "REPO_ROOT", tmp_path)
+
+    def fake_run(*args, **kwargs):
+        if "merge-base" in args:
+            return "base-sha"
+        return "one-sha\tone@example.com\ntwo-sha\ttwo@example.com"
+
+    monkeypatch.setattr(audit_pr_attribution, "run", fake_run)
+
+    assert audit_pr_attribution.new_emails() == ["one@example.com", "two@example.com"]
 
 
 
