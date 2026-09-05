@@ -788,6 +788,8 @@ All commands are also available as a slash command in the interactive CLI and in
 
 `--max-retries` is a per-task circuit-breaker override for the dispatcher. `--max-retries 1` blocks the task on the first non-successful attempt, while `--max-retries 3` allows two retries and blocks on the third failure. Omit it to use `kanban.failure_limit` from `config.yaml`, then the built-in default.
 
+`dispatch --max N` overrides `kanban.max_spawn` and caps live board concurrency, including exact `--task-id` dispatches: tasks already `running` consume the limit.
+
 ### Concurrency, scheduling, and child promotion config
 
 | Config key | Default | What it does |

@@ -26,18 +26,29 @@ def kanban_home(tmp_path, monkeypatch):
     return home
 
 
-def test_dispatch_task_id_dry_run_reports_only_named_task(
-    kanban_home, all_assignees_spawnable,
+@pytest.mark.parametrize(
+    ("max_spawn", "expected_spawned"),
+    [(1, False), (2, True)],
+)
+def test_dispatch_task_id_dry_run_honors_live_cap_and_names_target(
+    kanban_home, all_assignees_spawnable, max_spawn, expected_spawned,
 ):
     with kbc.connect_closing() as conn:
         first = kb.create_task(conn, title="first", assignee="alice", priority=100)
         assert kb.claim_task(conn, first) is not None
         target = kb.create_task(conn, title="target", assignee="bob")
 
-    output = kc.run_slash(f"dispatch --task-id {target} --dry-run --max 1 --json")
+    output = kc.run_slash(
+        f"dispatch --task-id {target} --dry-run --max {max_spawn} --json"
+    )
 
     parsed = json.loads(output)
-    assert parsed["spawned"] == [{"task_id": target, "assignee": "bob", "workspace": ""}]
+    expected = (
+        [{"task_id": target, "assignee": "bob", "workspace": ""}]
+        if expected_spawned
+        else []
+    )
+    assert parsed["spawned"] == expected
     with kbc.connect_closing() as conn:
         first_task = kb.get_task(conn, first)
         target_task = kb.get_task(conn, target)

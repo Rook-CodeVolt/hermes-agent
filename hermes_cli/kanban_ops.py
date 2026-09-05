@@ -91,9 +91,7 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
         )
         task_id = getattr(args, "task_id", None)
         if task_id:
-            # Exact dispatch is intrinsically capped at one; --max remains
-            # accepted so callers can use the defensive ``--max 1`` spelling.
-            res = kbd.dispatch_exact(conn, task_id, **common)
+            res = kbd.dispatch_exact(conn, task_id, max_spawn=max_spawn, **common)
         else:
             res = kbd.dispatch_once(conn, max_spawn=max_spawn, **common)
     if getattr(args, "json", False):

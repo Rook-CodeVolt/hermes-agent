@@ -29,10 +29,13 @@ def isolated_kanban_home(monkeypatch):
     yield test_home
 
 
-def test_cli_dispatch_passes_max_in_progress_from_config(isolated_kanban_home, monkeypatch):
+@pytest.mark.parametrize("task_id", [None, "t_exact"])
+def test_cli_dispatch_passes_max_in_progress_from_config(
+    isolated_kanban_home, monkeypatch, task_id,
+):
     """#33488: hermes kanban dispatch must pass kanban.max_in_progress from
-    config to dispatch_once. Without this, the global concurrency cap is
-    unreachable from the CLI even though it works from the gateway."""
+    config to queue and exact dispatch. Without this, the global concurrency
+    cap is unreachable from the CLI even though it works from the gateway."""
     from hermes_cli import kanban as kb_cli
     from hermes_cli import kanban_db
     from hermes_cli import kanban_db_dispatch as kbd
@@ -52,16 +55,23 @@ def test_cli_dispatch_passes_max_in_progress_from_config(isolated_kanban_home, m
 
     captured = {}
 
-    def fake_dispatch_once(conn, **kwargs):
+    def fake_dispatch(conn, *args, **kwargs):
         captured.update(kwargs)
         return kanban_db.DispatchResult()
 
-    monkeypatch.setattr(kbd, "dispatch_once", fake_dispatch_once)
+    monkeypatch.setattr(kbd, "dispatch_once", fake_dispatch)
+    monkeypatch.setattr(kbd, "dispatch_exact", fake_dispatch)
 
-    args = argparse.Namespace(dry_run=True, max=None, failure_limit=2, json=False)
+    args = argparse.Namespace(
+        dry_run=True,
+        max=None,
+        failure_limit=2,
+        json=False,
+        task_id=task_id,
+    )
     kb_cli._cmd_dispatch(args)
 
-    # Every config value must have reached dispatch_once.
+    # Every config value must reach the selected dispatch path.
     assert captured.get("max_in_progress") == 3, (
         f"CLI must pass kanban.max_in_progress from config; got {captured.get('max_in_progress')!r}"
     )

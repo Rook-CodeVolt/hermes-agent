@@ -598,6 +598,8 @@ hermes kanban gc [--event-retention-days N]            # 工作区 + 旧事件 +
 
 `--max-retries` 是调度器的每任务熔断器覆盖。`--max-retries 1` 在第一次不成功的尝试后阻塞任务，而 `--max-retries 3` 允许两次重试并在第三次失败时阻塞。省略它则使用 `config.yaml` 中的 `kanban.failure_limit`，然后是内置默认值。
 
+`dispatch --max N` 会覆盖 `kanban.max_spawn` 并限制看板当前并发数，包括指定 `--task-id` 的精确调度；已处于 `running` 状态的任务会占用此上限。
+
 ## `/kanban` 斜杠命令 {#kanban-slash-command}
 
 每个 `hermes kanban <action>` 动词也可以作为 `/kanban <action>` 访问 —— 从交互式 `hermes chat` 会话内部**以及**从任何 gateway 平台（Telegram、Discord、Slack、WhatsApp、Signal、Matrix、Mattermost、电子邮件、SMS）。两个界面都调用完全相同的 `hermes_cli.kanban.run_slash()` 入口点，该入口点复用 `hermes kanban` argparse 树，因此参数界面、标志和输出格式在 CLI、`/kanban` 和 `hermes kanban` 之间完全相同。你不必离开聊天来驱动看板。

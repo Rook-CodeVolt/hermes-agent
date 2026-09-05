@@ -1481,6 +1481,7 @@ def dispatch_exact(
     spawn_fn=None,
     ttl_seconds: Optional[int] = None,
     dry_run: bool = False,
+    max_spawn: Optional[int] = None,
     max_in_progress: Optional[int] = None,
     failure_limit: int = DEFAULT_FAILURE_LIMIT,
     board: Optional[str] = None,
@@ -1498,7 +1499,7 @@ def dispatch_exact(
     def _locked_dispatch() -> DispatchResult:
         result = DispatchResult()
         may_spawn, _ = _tick_spawn_budget(
-            conn, result, max_spawn=None, max_in_progress=max_in_progress, board=board,
+            conn, result, max_spawn=max_spawn, max_in_progress=max_in_progress, board=board,
         )
         if not may_spawn:
             return result
