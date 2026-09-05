@@ -1,61 +1,62 @@
 {
   "schema_version": 1,
-  "release_id": "cv-control-plane-2026-09-05-rc3",
-  "source_commit": "92f682d108c849aa16ec3bad7925837f4b54e115",
-  "source_tree": "7f4ccbb00a5a608f07552d88d7f7621f068489bf",
-  "manifest_sha256": "5a5d6eccf2a169314f157d0a77e8d769b6c84caabae78460c07283e8c8df70ab",
-  "archive_sha256": "5b0c3e68897b7c5f22052c2a53c24a69b60594402d9f94d10b73e618349b38ed",
+  "release_id": "cv-control-plane-2026-09-05-rc4-remediation1",
+  "source_commit": "8a6a153d35e478b2ae280db36d94c66d7af0a800",
+  "source_tree": "31b4d5171910b78f278b87f3d3d5dbf1666649f6",
+  "manifest_sha256": "ff7b70f9128cd717bc2bdad5de856d245a780a2247b26a0c6fea57a045a5dcb8",
+  "archive_sha256": "a9f5206e67ba4b2adccac7b1e13232bcc64b0c835ac645b67e00914106360326",
   "double_build_byte_identical": true,
-  "destinations": 77,
-  "unique_payloads": 28,
-  "archive_members": 29,
-  "production_profiles": [
-    "clara",
-    "daniel",
-    "elias",
-    "hannah",
-    "maya",
-    "oliver",
-    "rook",
-    "sophie"
-  ],
-  "interacting_suite": {
-    "passed": 422,
-    "skipped": 1,
-    "subtests_passed": 21,
-    "duration_seconds": 86.38
+  "destinations": 6,
+  "unique_payloads": 6,
+  "archive_members": 7,
+  "production_profiles": [],
+  "live_read_only_comparison": {
+    "destinations": 6,
+    "changed": 4,
+    "absent": 2,
+    "plugin_destinations": 0,
+    "live_mutation_performed": false
   },
   "focused_release_suite": {
-    "passed": 26,
-    "duration_seconds": 17.42
+    "passed": 430,
+    "skipped": 1,
+    "subtests_passed": 21,
+    "duration_seconds": 48.07
+  },
+  "additional_isolated_suites": {
+    "work_claims_passed": 259,
+    "work_claims_skipped": 1,
+    "work_claims_subtests_passed": 6,
+    "continuity_passed": 118,
+    "continuity_subtests_passed": 15
   },
   "static_checks": {
     "ruff": "PASS",
     "mypy_release_tool": "PASS",
-    "git_diff_check": "PASS"
+    "git_diff_check": "PASS",
+    "activation_manifest_copies_identical": "PASS",
+    "added_line_security_scan": "PASS"
   },
   "scratch_receipts": {
-    "install": "PASS",
+    "build": "PASS",
+    "double_build_byte_identical": "PASS",
+    "first_install_changed_destinations": 6,
+    "second_install_changed_destinations": 0,
     "installed_shape_immutable_export": "PASS"
   },
-  "typed_gate_contract": {
-    "jcs_positive_fixture": "PASS",
-    "recursive_g10_g20_g30_envelope_fixture": "PASS",
-    "forged_duplicate_contradictory_predecessors": "BLOCK",
-    "strict_cli": "PASS",
-    "operational_g30_status": "PENDING_INDEPENDENT_REVIEW"
-  },
-  "incident_controls": {
-    "AUTH-WRONG-BOARD": "BLOCK",
-    "SCRATCH-NO-EFFECTS": "BLOCK",
-    "SCRATCH-PIDS": "BLOCK",
-    "GATEWAY-PROFILE": "BLOCK"
+  "scope_controls": {
+    "continuity_policy": "cv-continuity-guard-v1",
+    "work_claims_payload_in_archive": false,
+    "profile_destinations": 0,
+    "accepted_work_claims_1_6_1_preserved_in_source": true,
+    "unsafe_archive_modes_rejected": true
   },
   "prior_external_proofs": {
-    "status": "accepted_non_overriding_evidence_from_rc1",
+    "status": "non_overriding_prior_evidence_only",
     "launchd_canary_sha256": "3a1086a915a648776239fc618eea1597becc5864f870297486f973cb6a20d5bb",
     "unchanged_pid_sha256": "f4408e49a9366aacb27876c201b4410c2460f59bd8abff76880f655711954384"
   },
+  "independent_exact_byte_review": "PENDING_NEW_MAYA_TASK",
   "live_activation_performed": false,
   "live_paths_modified": false,
   "verdict": "PASS_READY_FOR_INDEPENDENT_EXACT_BYTE_REVIEW"

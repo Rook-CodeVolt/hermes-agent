@@ -1,24 +1,18 @@
 {
   "cwd": "arbitrary",
   "environment": "minimal",
-  "installed_shape_sha256": "a930f0a1b82ff69fcdf2cd2afd4b86feaaec32ca4d6924ebec71b028554f674e",
-  "packages_checked": [
-    "work_claims"
-  ],
+  "installed_shape_sha256": "586798cb84ec441dd97dbe592c1b69963b41fd88382fb3cdb0b24b4bea5e25a6",
+  "packages_checked": [],
   "profiles_checked": [
-    "root",
-    "clara",
-    "daniel",
-    "elias",
-    "hannah",
-    "maya",
-    "oliver",
-    "rook",
-    "sophie"
+    "root"
   ],
-  "release_id": "cv-control-plane-2026-09-05-rc3",
-  "runtime_commit": "92f682d108c849aa16ec3bad7925837f4b54e115",
-  "runtime_tree": "7f4ccbb00a5a608f07552d88d7f7621f068489bf",
+  "release_id": "cv-control-plane-2026-09-05-rc4-remediation1",
+  "runtime_commit": "8a6a153d35e478b2ae280db36d94c66d7af0a800",
+  "runtime_modules_checked": [
+    "hermes_state",
+    "hermes_state_registry"
+  ],
+  "runtime_tree": "31b4d5171910b78f278b87f3d3d5dbf1666649f6",
   "schema_version": 1,
   "verdict": "PASS"
 }
