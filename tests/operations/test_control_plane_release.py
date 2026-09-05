@@ -159,6 +159,18 @@ def test_manifest_loader_rejects_unknown_fields(tmp_path: Path) -> None:
         load_manifest(path)
 
 
+def test_manifest_loader_rejects_special_permission_bits(tmp_path: Path) -> None:
+    repo = _source_repo(tmp_path)
+    build = build_release(repo, _spec(repo), tmp_path / "build")
+    manifest = json.loads(build.manifest_bytes)
+    manifest["destinations"][0]["mode"] = "4755"
+    path = tmp_path / "unsafe-manifest.json"
+    path.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+
+    with pytest.raises(ContractError, match="unsafe or non-canonical mode"):
+        load_manifest(path)
+
+
 def _target(root: Path, item: dict) -> Path:
     base = root if item["profile"] == "root" else root / "profiles" / item["profile"]
     return base / item["relative_destination"]

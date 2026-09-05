@@ -303,6 +303,16 @@ def load_manifest(path: Path) -> Dict[str, Any]:
             raise ContractError("manifest contains an invalid sha256")
         if item["payload_path"] != f"payload/{digest}":
             raise ContractError("manifest payload path is not content-addressed")
+        try:
+            mode = int(item["mode"], 8)
+        except (TypeError, ValueError) as exc:
+            raise ContractError("mode must be a four-digit octal string") from exc
+        if item["mode"] != f"{mode:04o}" or mode & 0o7000:
+            raise ContractError("unsafe or non-canonical mode")
+        if not isinstance(item["byte_length"], int) or isinstance(item["byte_length"], bool) or item["byte_length"] < 0:
+            raise ContractError("manifest byte_length must be a non-negative integer")
+        if not isinstance(item["dependency_order"], int) or isinstance(item["dependency_order"], bool) or item["dependency_order"] < 0:
+            raise ContractError("manifest dependency_order must be a non-negative integer")
     if manifest["policy_version"] == CONTROL_PLANE_POLICY:
         if not REQUIRED_CLASSES.issubset(classes) or plugin_profiles != {"root", *PRODUCTION_PROFILES}:
             raise ContractError("manifest release unit or profile distribution is partial")

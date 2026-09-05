@@ -46,6 +46,7 @@ The exact sequence is supported runtime update with its updater-owned fleet rest
    TX=/Users/rook/.hermes/release-preimages/cv-control-plane-2026-09-05-rc4-remediation1
    MANIFEST="$TX/candidate/manifest.json"
    ARCHIVE="$TX/candidate/release.tar"
+   REVIEW_RECEIPT="$TX/candidate/security-review-receipt.json"
    ```
 
    `TX` must not exist. Create it mode 0700 and export the two frozen files with these literal commands:
@@ -58,7 +59,7 @@ The exact sequence is supported runtime update with its updater-owned fleet rest
    shasum -a 256 "$MANIFEST" "$ARCHIVE"
    ```
 
-   Compare both printed digests with Maya's reviewed receipt before any live change.
+   Copy Maya's exact attached JSON receipt to `$REVIEW_RECEIPT` without editing it. Require its verdict to be `PASS` and its `freeze_commit`, `freeze_tree`, `source_commit`, `source_tree`, `manifest_sha256`, and `archive_sha256` values to identify this candidate. Compare both printed digests with that receipt before any live change.
 3. Capture complete preimages while the continuity guard is unloaded and before runtime or payload mutation:
 
    - Require `git -C "$RUNTIME" status --porcelain=v1 --untracked-files=all` to be empty. Record runtime HEAD/tree, source/freeze ref values, `git stash list`, remote URL, and `git ls-remote origin "$SOURCE_REF"`.
@@ -69,6 +70,10 @@ The exact sequence is supported runtime update with its updater-owned fleet rest
 4. Prove the channel, then perform the supported runtime update exactly:
 
    ```sh
+   EXPECTED_FREEZE_COMMIT=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["freeze_commit"])' "$REVIEW_RECEIPT")
+   EXPECTED_FREEZE_TREE=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["freeze_tree"])' "$REVIEW_RECEIPT")
+   test "$(git -C "$RUNTIME" rev-parse --verify "$FREEZE_REF^{commit}")" = "$EXPECTED_FREEZE_COMMIT"
+   test "$(git -C "$RUNTIME" rev-parse --verify "$FREEZE_REF^{tree}")" = "$EXPECTED_FREEZE_TREE"
    test "$(git -C "$RUNTIME" rev-parse --verify "$SOURCE_REF^{commit}")" = "$(python "$RUNTIME/scripts/control_plane_release.py" --help >/dev/null 2>&1; python -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$MANIFEST")"
    test "$(git -C "$RUNTIME" ls-remote --exit-code origin "$SOURCE_REF" | cut -f1)" = "$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$MANIFEST")"
    "$RUNTIME/venv/bin/hermes" update --branch "$SOURCE_CHANNEL" --yes --keep-stash
