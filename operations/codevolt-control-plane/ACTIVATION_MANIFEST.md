@@ -13,7 +13,7 @@ Before activation, the authorized operator must fetch or publish the source chan
 
 ## Scope correction
 
-The release remains a closed 78-destination control-plane unit, but every work-claims destination now carries the exact independently reviewed 1.6.1 bytes: plugin `e6127feb…`, package entrypoint `80e4333a…`, core `d79e4b90…`, README `854e8f1e…`, and regression test `f7a395f5…`. Installing over the accepted eight-profile 1.6.1 fleet is therefore idempotent for those profile payloads; it cannot downgrade them to 1.6.0. Root helpers, checks, fixtures, documentation, and launchd payloads remain explicit manifest destinations and may change only through the one transactional installer command below.
+The archive is narrowed to exactly six continuity-owned destinations: guard, state helper, continuity regression, two isolated-canary helpers, and the continuity launchd plist. It contains no work-claims profile/root payload, installer, unrelated check, fixture, migration descriptor, or recovery-document copy. The source commit still preserves the exact independently reviewed work-claims 1.6.1 bytes (plugin `e6127feb…`, package entrypoint `80e4333a…`, core `d79e4b90…`, README `854e8f1e…`, and regression test `f7a395f5…`), so the runtime update cannot reintroduce the rejected 1.6.0 source.
 
 `config.yaml` is not a destination. The reviewed plist already supplies `HERMES_PROFILE=rook` and `HERMES_HOME=/Users/rook/.hermes/profiles/rook`; no config or plist edit is authorized outside an exact manifest byte change.
 
@@ -28,7 +28,7 @@ e0ac543dac9f45ad2dd10320c1e40fdd81408e2e0def8f18b84eeda954c04956  scripts/tests/
 19953276caf699de0d22b4f214616cc48a6e4386da4944d0cc4e9e5d0750db42  Library/LaunchAgents/com.codevolt.continuity-guard.plist
 ```
 
-The manifest is authoritative for all 78 destination hashes, byte lengths, modes, dependency order, source identity, and archive payload members.
+The manifest is authoritative for all six destination hashes, byte lengths, modes, dependency order, source identity, and archive payload members.
 
 ## One ordered activation transaction — not performed here
 
@@ -75,7 +75,7 @@ The exact sequence is supported runtime update with its updater-owned fleet rest
    ```
 
    Immediately require runtime HEAD/tree to equal the manifest source commit/tree and require the checkout to be clean. Any update failure begins rollback; payload installation must not run.
-5. Install the frozen 78-destination payload with the literal transactional command:
+5. Install the frozen six-destination payload with the literal transactional command:
 
    ```sh
    "$RUNTIME/venv/bin/python" "$RUNTIME/scripts/control_plane_release.py" install \
@@ -83,7 +83,7 @@ The exact sequence is supported runtime update with its updater-owned fleet rest
      --root "$ROOT" > "$TX/install-receipt.json"
    ```
 
-   The installer stages beside each target, atomically replaces only byte/mode differences, and restores all changed destinations in reverse order on any exception. Require `verdict=PASS`, `destinations_installed=78`, and a changed count consistent with the preimage comparison.
+   The installer stages beside each target, atomically replaces only byte/mode differences, and restores all changed destinations in reverse order on any exception. Require `verdict=PASS`, `destinations_installed=6`, and a changed count consistent with the preimage comparison.
 6. Read back every manifest destination and require exact path, existence, mode, byte length, SHA-256, and `cmp` against the archive payload. Run the installed-shape gate against the manifest source commit/tree. Stop on any mismatch.
 7. The supported updater in step 4 owns the Hermes fleet restart for an actual runtime code change; do not issue a second gateway restart after payload installation. Require its plan/readback to cover every gateway recorded running in step 3, including Nova, while preserving stopped profiles as stopped. If the runtime commit/tree was already exact and the updater performed no code/path change, require gateway PID/birth identities to remain unchanged. Reload `com.codevolt.continuity-guard` only if it was loaded before and installation changed the guard/helper/plist path, bytes, or mode; otherwise preserve its prior loaded/running state without gratuitous reload.
 8. Run the live regression:

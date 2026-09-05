@@ -126,6 +126,31 @@ def test_double_build_is_byte_identical_and_binds_git_identity(tmp_path: Path) -
     assert first.manifest_sha256 == hashlib.sha256(first.manifest_bytes).hexdigest()
 
 
+def test_narrow_continuity_policy_admits_only_the_six_owned_destinations(tmp_path: Path) -> None:
+    repo = _source_repo(tmp_path)
+    spec = _spec(repo)
+    spec["policy_version"] = "cv-continuity-guard-v1"
+    spec["production_profiles"] = []
+    spec["destinations"] = [
+        {"logical_name": "continuity-guard", "source": "helpers/helper.py", "profile": "root", "destination_class": "helper", "relative_destination": "scripts/codevolt_continuity_guard.py", "mode": "0755", "owner_class": "root_owner", "plugin_version": None, "dependency_order": 10},
+        {"logical_name": "hermes-state-common", "source": "helpers/helper.py", "profile": "root", "destination_class": "helper", "relative_destination": "scripts/hermes_state_common.py", "mode": "0644", "owner_class": "root_owner", "plugin_version": None, "dependency_order": 10},
+        {"logical_name": "continuity-launchd-canary", "source": "helpers/helper.py", "profile": "root", "destination_class": "helper", "relative_destination": "scripts/tests/run_launchd_canary.py", "mode": "0755", "owner_class": "root_owner", "plugin_version": None, "dependency_order": 10},
+        {"logical_name": "continuity-launchd-worker", "source": "helpers/helper.py", "profile": "root", "destination_class": "helper", "relative_destination": "scripts/tests/launchd_canary_worker.py", "mode": "0755", "owner_class": "root_owner", "plugin_version": None, "dependency_order": 10},
+        {"logical_name": "continuity-launchd", "source": "launchd/demo.plist", "profile": "root", "destination_class": "launchd", "relative_destination": "Library/LaunchAgents/com.codevolt.continuity-guard.plist", "mode": "0644", "owner_class": "root_owner", "plugin_version": None, "dependency_order": 50},
+        {"logical_name": "continuity-test", "source": "checks/check.py", "profile": "root", "destination_class": "check", "relative_destination": "release-checks/test_codevolt_continuity_guard.py", "mode": "0644", "owner_class": "root_owner", "plugin_version": None, "dependency_order": 60},
+    ]
+
+    build = build_release(repo, spec, tmp_path / "narrow-build")
+    manifest = json.loads(build.manifest_bytes)
+    assert manifest["production_profiles"] == []
+    assert len(manifest["destinations"]) == 6
+
+    broadened = copy.deepcopy(spec)
+    broadened["destinations"].append(_spec(repo)["destinations"][0])
+    with pytest.raises(ContractError, match="only the exact owned destination set"):
+        build_release(repo, broadened, tmp_path / "must-not-build")
+
+
 def test_manifest_loader_rejects_unknown_fields(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text('{"schema_version":1,"unknown":true}\n', encoding="utf-8")
@@ -779,26 +804,22 @@ def test_rc4_candidate_preserves_accepted_work_claims_1_6_1() -> None:
     for relative, expected in accepted_hashes.items():
         assert hashlib.sha256((repo / relative).read_bytes()).hexdigest() == expected
 
-    plugin_destinations = [
-        item for item in spec["destinations"] if item["destination_class"] == "plugin"
-    ]
-    assert len(spec["destinations"]) == 78
-    assert plugin_destinations
-    assert {item["plugin_version"] for item in plugin_destinations} == {"1.6.1"}
+    expected_destinations = {
+        "scripts/codevolt_continuity_guard.py",
+        "scripts/hermes_state_common.py",
+        "scripts/tests/run_launchd_canary.py",
+        "scripts/tests/launchd_canary_worker.py",
+        "Library/LaunchAgents/com.codevolt.continuity-guard.plist",
+        "release-checks/test_codevolt_continuity_guard.py",
+    }
+    assert spec["policy_version"] == "cv-continuity-guard-v1"
+    assert spec["production_profiles"] == []
+    assert {item["relative_destination"] for item in spec["destinations"]} == expected_destinations
+    assert not [item for item in spec["destinations"] if item["destination_class"] == "plugin"]
     assert spec["release_channel"] == "candidate/codevolt-control-plane-rc4-continuity-source"
     assert manifest["release_id"] == spec["release_id"]
     assert manifest["release_channel"] == spec["release_channel"]
-    manifest_plugins = [
-        item for item in manifest["destinations"] if item["destination_class"] == "plugin"
-    ]
-    assert len(manifest_plugins) == 54
-    assert {item["plugin_version"] for item in manifest_plugins} == {"1.6.1"}
-    for item in manifest_plugins:
-        source = next(
-            raw["source"]
-            for raw in plugin_destinations
-            if raw["profile"] == item["profile"]
-            and raw["relative_destination"] == item["relative_destination"]
-        )
-        if source in accepted_hashes:
-            assert item["sha256"] == accepted_hashes[source]
+    assert manifest["policy_version"] == "cv-continuity-guard-v1"
+    assert manifest["production_profiles"] == []
+    assert {item["relative_destination"] for item in manifest["destinations"]} == expected_destinations
+    assert not [item for item in manifest["destinations"] if item["destination_class"] == "plugin"]

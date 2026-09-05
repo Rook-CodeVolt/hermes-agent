@@ -30,6 +30,16 @@ PRODUCTION_PROFILES: Tuple[str, ...] = (
 REQUIRED_CLASSES = {
     "plugin", "helper", "launchd", "migration", "check", "fixture", "recovery_documentation"
 }
+CONTROL_PLANE_POLICY = "cv-control-plane-assurance-v2"
+CONTINUITY_POLICY = "cv-continuity-guard-v1"
+CONTINUITY_DESTINATIONS = {
+    ("continuity-guard", "helper", "scripts/codevolt_continuity_guard.py"),
+    ("hermes-state-common", "helper", "scripts/hermes_state_common.py"),
+    ("continuity-launchd-canary", "helper", "scripts/tests/run_launchd_canary.py"),
+    ("continuity-launchd-worker", "helper", "scripts/tests/launchd_canary_worker.py"),
+    ("continuity-launchd", "launchd", "Library/LaunchAgents/com.codevolt.continuity-guard.plist"),
+    ("continuity-test", "check", "release-checks/test_codevolt_continuity_guard.py"),
+}
 SPEC_FIELDS = {
     "schema_version", "release_id", "policy_version", "release_channel",
     "production_profiles", "toolchain", "restart_scope", "migration",
@@ -95,10 +105,11 @@ def _validate_spec(spec: Mapping[str, Any]) -> None:
         raise ContractError("release specification fields are not the closed v1 set")
     if spec["schema_version"] != 1:
         raise ContractError("unsupported release specification schema")
-    if spec["policy_version"] != "cv-control-plane-assurance-v2":
+    if spec["policy_version"] not in {CONTROL_PLANE_POLICY, CONTINUITY_POLICY}:
         raise ContractError("wrong policy version")
-    if tuple(spec["production_profiles"]) != PRODUCTION_PROFILES:
-        raise ContractError("production profile roster must be the exact declared fleet")
+    expected_profiles = PRODUCTION_PROFILES if spec["policy_version"] == CONTROL_PLANE_POLICY else ()
+    if tuple(spec["production_profiles"]) != expected_profiles:
+        raise ContractError("production profile roster does not match the release policy")
     if not isinstance(spec["destinations"], list) or not spec["destinations"]:
         raise ContractError("destinations must be a non-empty list")
     seen: set = set()
@@ -127,13 +138,24 @@ def _validate_spec(spec: Mapping[str, Any]) -> None:
             raise ContractError("unsafe or non-canonical mode")
         if not isinstance(item["dependency_order"], int) or item["dependency_order"] < 0:
             raise ContractError("dependency_order must be a non-negative integer")
-    if not REQUIRED_CLASSES.issubset(classes):
-        raise ContractError(f"release unit is partial; missing classes: {sorted(REQUIRED_CLASSES - classes)}")
-    if plugin_profiles != {"root", *PRODUCTION_PROFILES}:
-        raise ContractError(
-            "plugin distribution must cover root and every declared profile",
-            reason_code="EXACT_TASK_OR_DISTRIBUTION_MISMATCH",
-        )
+    if spec["policy_version"] == CONTROL_PLANE_POLICY:
+        if not REQUIRED_CLASSES.issubset(classes):
+            raise ContractError(f"release unit is partial; missing classes: {sorted(REQUIRED_CLASSES - classes)}")
+        if plugin_profiles != {"root", *PRODUCTION_PROFILES}:
+            raise ContractError(
+                "plugin distribution must cover root and every declared profile",
+                reason_code="EXACT_TASK_OR_DISTRIBUTION_MISMATCH",
+            )
+    else:
+        actual = {
+            (item["logical_name"], item["destination_class"], item["relative_destination"])
+            for item in spec["destinations"]
+        }
+        if actual != CONTINUITY_DESTINATIONS or any(item["profile"] != "root" for item in spec["destinations"]):
+            raise ContractError(
+                "continuity release must contain only the exact owned destination set",
+                reason_code="EXACT_TASK_OR_DISTRIBUTION_MISMATCH",
+            )
 
 
 def _tracked_head_bytes(repo: Path, relative: str) -> bytes:
@@ -205,7 +227,7 @@ def build_release(repo: Path, spec: Mapping[str, Any], output_dir: Path) -> Buil
         "source_tree": tree,
         "release_channel": spec["release_channel"],
         "toolchain": spec["toolchain"],
-        "production_profiles": list(PRODUCTION_PROFILES),
+        "production_profiles": list(spec["production_profiles"]),
         "destinations": destinations,
         "restart_scope": spec["restart_scope"],
         "migration": spec["migration"],
@@ -252,10 +274,11 @@ def load_manifest(path: Path) -> Dict[str, Any]:
         raise ContractError("manifest fields are not the closed v1 set")
     if raw != _canonical(manifest):
         raise ContractError("manifest is not canonical JSON")
-    if manifest["schema_version"] != 1 or manifest["policy_version"] != "cv-control-plane-assurance-v2":
+    if manifest["schema_version"] != 1 or manifest["policy_version"] not in {CONTROL_PLANE_POLICY, CONTINUITY_POLICY}:
         raise ContractError("manifest schema or policy is not admitted")
-    if tuple(manifest["production_profiles"]) != PRODUCTION_PROFILES:
-        raise ContractError("manifest profile roster is not the exact declared fleet")
+    expected_profiles = PRODUCTION_PROFILES if manifest["policy_version"] == CONTROL_PLANE_POLICY else ()
+    if tuple(manifest["production_profiles"]) != expected_profiles:
+        raise ContractError("manifest profile roster does not match the release policy")
     destinations = manifest.get("destinations")
     if not isinstance(destinations, list) or not destinations:
         raise ContractError("manifest destinations must be non-empty")
@@ -280,8 +303,16 @@ def load_manifest(path: Path) -> Dict[str, Any]:
             raise ContractError("manifest contains an invalid sha256")
         if item["payload_path"] != f"payload/{digest}":
             raise ContractError("manifest payload path is not content-addressed")
-    if not REQUIRED_CLASSES.issubset(classes) or plugin_profiles != {"root", *PRODUCTION_PROFILES}:
-        raise ContractError("manifest release unit or profile distribution is partial")
+    if manifest["policy_version"] == CONTROL_PLANE_POLICY:
+        if not REQUIRED_CLASSES.issubset(classes) or plugin_profiles != {"root", *PRODUCTION_PROFILES}:
+            raise ContractError("manifest release unit or profile distribution is partial")
+    else:
+        actual = {
+            (item["logical_name"], item["destination_class"], item["relative_destination"])
+            for item in destinations
+        }
+        if actual != CONTINUITY_DESTINATIONS or any(item["profile"] != "root" for item in destinations):
+            raise ContractError("manifest continuity destination set is not exact")
     return manifest
 
 
@@ -476,7 +507,7 @@ def run_installed_shape(
         and len(PurePosixPath(item["relative_destination"]).parts) >= 2
         and PurePosixPath(item["relative_destination"]).parts[0] == "plugins"
     })
-    if not package_names:
+    if not package_names and manifest["policy_version"] != CONTINUITY_POLICY:
         raise ContractError("no importable plugin package is declared")
     runtime_modules = (
         ["hermes_state", "hermes_state_registry"]

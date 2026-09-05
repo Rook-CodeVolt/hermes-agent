@@ -13,10 +13,10 @@ Candidate construction and proof are scratch-only. They do not authorize or perf
 Release shape
 
 - Runtime: full Git commit and tree, activated only through `hermes update --branch candidate/codevolt-control-plane-rc4-continuity-source --yes --keep-stash` after both the local source ref and the canonical remote channel resolve exactly to `manifest.source_commit`. The separate freeze ref is never an update channel.
-- Plugin: exact accepted work-claims 1.6.1 bytes at root plus `clara`, `daniel`, `elias`, `hannah`, `maya`, `oliver`, `rook`, and `sophie` destinations. No ambient discovery, wildcards, or 1.6.0 downgrade is admitted.
-- Helpers/checks: work-claims installer, continuity guard, the manifest-bound canonical `hermes_state_common.py`, launchd canary helpers, tests, contract and incident registry.
-- Launchd: the reviewed continuity-guard plist as payload; the proof uses only the separately labelled synthetic canary.
-- Migration: closed schema-4-to-schema-5 descriptor.
+- Plugin: no plugin destination is present. The source commit preserves the exact accepted work-claims 1.6.1 bytes, while the archive cannot mutate or downgrade any profile/root plugin installation.
+- Helpers/checks: exactly the continuity guard, manifest-bound canonical `hermes_state_common.py`, continuity regression, and two launchd-canary helpers.
+- Launchd: only the reviewed continuity-guard plist is a payload; the proof uses the separately labelled synthetic canary.
+- Migration: the schema-4-to-schema-5 descriptor remains source documentation, not an install destination.
 - Recovery: exact-preimage restoration inside a failed payload transaction plus the explicit reverse runtime/payload/process/state rollback in `ACTIVATION_MANIFEST.md` for any later activation-gate failure. A future accepted release remains forward-only; this operational rollback restores the immediate pre-activation state and is not labelled as a new accepted release.
 
 Build
