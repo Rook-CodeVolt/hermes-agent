@@ -76,13 +76,17 @@ rc4 compatibility correction (task `t_fc863dc9`)
 19. Installed runtime with a stale script-directory state helper
    - RED: `test_installed_shape_rejects_legacy_state_helper_missing_runtime_symbol` returned without raising even though both immutable runtime modules imported `stat_db_file_identity` from a packaged legacy helper that lacked it.
    - GREEN: a declared `hermes-state-common` payload triggers isolated imports of `hermes_state` and `hermes_state_registry` with the packaged script helper first on `sys.path`; the legacy fixture now raises `INSTALLED_SHAPE_IMPORT_FAILED`. The rc4 spec installs the exact canonical helper in the same transaction as the guard.
+20. Current-runtime control-plane dependencies
+   - RED: the accepted rc3 checks could not collect on current main because dispatcher identity, confinement, and execution-turn helpers were absent and tests still used removed `hermes_cli.kanban_db` compatibility pointers.
+   - GREEN: the accepted helpers were ported to the decomposed current APIs (`kanban_db_connect`, `kanban_db_dispatch`, and `kanban_db_identity`), wired into worker spawn, CLI admission, plugin dispatch, turn lifetime, and file mutations, and validated without in-tree compatibility-pointer use.
 
 Final interacting candidate suite
 
-- Command scope: release harness, 118 continuity regressions, dispatcher identity, installer distribution, lifecycle, confinement, CV-A01 dispatcher scope, and work-claims core.
-- Result before remediation: `409 passed, 1 skipped, 21 subtests passed in 54.54s`.
-- Remediation-generation-2 interacting result before freeze: `422 passed, 1 skipped, 21 subtests passed in 86.38s`.
-- Static checks: Ruff passed all changed Python; mypy passed `scripts/control_plane_release.py`; every JSON document parsed; the launchd plist passed `plutil -lint`.
+- Command scope: release harness, 118 continuity regressions, dispatcher identity, execution-turn lifetime, workspace and file confinement, terminal containment, lifecycle, CV-A01 dispatcher scope, and work-claims core.
+- Frozen-source interacting result: `406 passed, 0 failed` across 9 files in 17.5 seconds.
+- Impacted current-runtime result: `167 passed, 2 Windows-only skipped` across file operations, durable-turn admission, and plugin dispatch tests.
+- Static checks: Ruff passed all changed Python; mypy passed `scripts/control_plane_release.py`; the compatibility-pointer scan and `git diff --check` passed.
+- Deterministic release: two builds were byte-identical, then a scratch install changed all 78 destinations and immutable-runtime installed-shape verification passed for root plus eight profiles; exact digests are recorded in the build and freeze receipts.
 - The real synthetic launchd canary attempted from the dispatcher sandbox failed closed because `launchctl bootstrap` returned 5 and the label stayed absent (`print` returned 113). The exact BLOCK receipt is retained. macOS also denied `ps`, so this worker did not claim either missing proof from inside the sandbox.
 - Post-freeze gate closure by Rook outside the dispatcher sandbox: `launchd-canary-rook-outside-sandbox-PASS.json` records bootstrap rc 0, RunAtLoad, a distinct 60-second interval observation, bootout rc 0 and proved absence. `pid-unchanged-and-restart-rook-outside-sandbox-PASS.json` records a real ps-based `_hermes_pid_snapshot()` around the supported synthetic updater rehearsal with identical 38-entry PID/birth identities before and after. No live activation or live-path mutation was performed. The restart-handoff proof remains the injected-observer regression and is not represented as a separate real-PID restart run.
 

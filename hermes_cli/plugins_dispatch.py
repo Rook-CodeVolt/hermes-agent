@@ -47,7 +47,17 @@ _HOOK_TIMEOUT_BOUNDED_HOOKS: Set[str] = {
 # Policy hooks: timeout / still-running must fail closed (block the tool).
 _HOOK_TIMEOUT_FAIL_CLOSED_HOOKS: Set[str] = {"pre_tool_call"}
 # Documented parent-thread serialization contract — never run on a timeout worker (hooks.md).
-_HOOK_CALLER_THREAD_HOOKS: Set[str] = {"subagent_stop"}
+_HOOK_CALLER_THREAD_HOOKS: Set[str] = {
+    "subagent_stop",
+    "on_execution_turn_begin",
+    "on_execution_turn_renew",
+    "on_execution_turn_end",
+}
+_REQUIRED_HOOKS = frozenset({
+    "on_execution_turn_begin",
+    "on_execution_turn_renew",
+    "on_execution_turn_end",
+})
 # After a timeout, suppress the same callback this long so a hung hook cannot pile up threads.
 _HOOK_TIMEOUT_SUPPRESSION_SECONDS = 60.0
 _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE = "pre_tool_call plugin callback timed out or is still running"
@@ -162,6 +172,37 @@ class PluginDispatchMixin:
             name: value for name, value in payload.items()
             if name in parameters and parameters[name].kind in keyword_kinds
         })
+
+    def invoke_required_hook(
+        self, hook_name: str, **kwargs: Any
+    ) -> List[Mapping[str, Any]]:
+        """Synchronously invoke callbacks that must explicitly acknowledge."""
+        from hermes_cli.plugins import RequiredHookError
+
+        if hook_name not in _REQUIRED_HOOKS:
+            raise RequiredHookError(f"Hook {hook_name!r} is not a required hook")
+        callbacks = self._hooks.get(hook_name, [])
+        if not callbacks:
+            raise RequiredHookError(
+                f"Required hook {hook_name!r} has no registered callbacks"
+            )
+        kwargs.setdefault("telemetry_schema_version", OBSERVER_SCHEMA_VERSION)
+        results: List[Mapping[str, Any]] = []
+        for callback in callbacks:
+            callback_name = getattr(callback, "__name__", repr(callback))
+            try:
+                result = self._invoke_hook_callback(callback, kwargs)
+            except Exception as exc:
+                raise RequiredHookError(
+                    f"Required hook {hook_name!r} callback {callback_name} raised"
+                ) from exc
+            if not isinstance(result, Mapping) or result.get("acknowledged") is not True:
+                raise RequiredHookError(
+                    f"Required hook {hook_name!r} callback {callback_name} must return "
+                    "a mapping with acknowledged=true"
+                )
+            results.append(result)
+        return results
 
     def invoke_hook(self, hook_name: str, **kwargs: Any) -> List[Any]:
         """Call all callbacks for *hook_name*; return their non-``None`` results.

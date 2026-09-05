@@ -3306,6 +3306,9 @@ def _default_to_chat(args) -> None:
 
 def main():
     """Main entry point for hermes CLI."""
+    from hermes_cli.dispatcher_worker_identity import bind_dispatcher_worker_identity
+
+    bind_dispatcher_worker_identity()
     _set_process_title()
     _advertise_agent_env()
 

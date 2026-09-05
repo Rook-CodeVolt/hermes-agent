@@ -8,6 +8,7 @@ late-bound via ``_kb`` (import-cycle breaking) so monkeypatching
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import re
 import signal
@@ -23,6 +24,8 @@ from typing import Callable
 from typing import Mapping
 from typing import Optional
 from typing import TYPE_CHECKING
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from hermes_cli.kanban_db import Task
@@ -2249,6 +2252,52 @@ def _restart_safe_worker_argv(task: Task, command: list[str]) -> list[str]:
     )
 
 
+def _complete_worker_handshake(
+    handshake,
+    task: Task,
+    workspace: str,
+    env: Mapping[str, str],
+    *,
+    worker_pid: int,
+) -> None:
+    """Mint and deliver a process-bound identity, aborting closed on failure."""
+    from hermes_cli import kanban_db_identity as _kbi
+
+    db_path = env.get("HERMES_KANBAN_DB")
+    try:
+        if not db_path:
+            raise ValueError("no HERMES_KANBAN_DB resolved for the worker")
+        if task.current_run_id is None:
+            raise ValueError("task has no current run to bind the identity to")
+        with _kbc.connect_closing(db_path=Path(db_path)) as conn:
+            _kbi.purge_expired_worker_identities(conn)
+            token = _kbi.issue_worker_identity(
+                conn,
+                task_id=task.id,
+                run_id=int(task.current_run_id),
+                workspace_path=workspace,
+                worker_pid=worker_pid,
+            )
+        handshake.send(token, db_path=db_path)
+    except Exception as exc:
+        _log.error(
+            "kanban worker %s: identity handshake failed (%s); the worker will fail closed and exit",
+            task.id,
+            exc,
+        )
+        handshake.abort()
+
+
+def _scrub_worker_env(env: dict[str, str]) -> None:
+    """Remove inherited process state that must not cross into a worker."""
+    from gateway.session_context import _VAR_MAP
+
+    for key in _VAR_MAP:
+        env.pop(key, None)
+    env.pop("HERMES_SAFE_MODE", None)
+    env.pop("HERMES_TUI", None)
+
+
 def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -> Optional[int]:
     """Fire-and-forget ``hermes -p <profile> chat -q ...`` subprocess.
 
@@ -2272,11 +2321,7 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
         scrub_secrets=is_multiplex_active(),
         inherit_profile_home=True,
     )
-    # The dispatcher is detached from every conversation; its worker must never
-    # inherit routing mirrored by a previous gateway turn.
-    from gateway.session_context import _VAR_MAP
-    for key in _VAR_MAP:
-        env.pop(key, None)
+    _scrub_worker_env(env)
 
     # Inject HERMES_HOME so the worker reads the profile-scoped config.yaml:
     # without it the child's get_hermes_home() falls back to the DEFAULT
@@ -2345,23 +2390,40 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
     # that is performing the handoff.
     cmd = _restart_safe_worker_argv(task, cmd)
     log_f = _open_worker_log(task, board)
+    from agent.dispatcher_identity import WorkerHandshake
+
+    handshake = None if _kb._IS_WINDOWS else WorkerHandshake()
+    if handshake is not None:
+        env.update(handshake.env_for_child())
     try:
-        proc = subprocess.Popen(  # noqa: S603 -- argv is a fixed list built above
-            cmd,
-            cwd=workspace if os.path.isdir(workspace) else None,
-            stdin=subprocess.DEVNULL,
-            stdout=log_f,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-            creationflags=subprocess.CREATE_NO_WINDOW if _kb._IS_WINDOWS else 0,
-        )
-    except FileNotFoundError:
-        log_f.close()
-        raise RuntimeError(
-            "`hermes` executable not found on PATH. "
-            "Install Hermes Agent or activate its venv before running the kanban dispatcher."
-        )
+        try:
+            proc = subprocess.Popen(  # noqa: S603 -- argv is a fixed list built above
+                cmd,
+                cwd=workspace if os.path.isdir(workspace) else None,
+                stdin=subprocess.DEVNULL,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
+                pass_fds=() if handshake is None else handshake.pass_fds(),
+                creationflags=subprocess.CREATE_NO_WINDOW if _kb._IS_WINDOWS else 0,
+            )
+        except FileNotFoundError:
+            log_f.close()
+            raise RuntimeError(
+                "`hermes` executable not found on PATH. "
+                "Install Hermes Agent or activate its venv before running the kanban dispatcher."
+            )
+        finally:
+            if handshake is not None:
+                handshake.close_read_fd()
+        if handshake is not None:
+            _complete_worker_handshake(
+                handshake, task, workspace, env, worker_pid=proc.pid
+            )
+    finally:
+        if handshake is not None:
+            handshake.close()
     # Intentionally NOT closing log_f: the child keeps writing after return;
     # the OS-level FD stays open in the child until it exits.
     return proc.pid

@@ -22,6 +22,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict
 from pathlib import Path
 
+from agent import confined_file_ops as _confinement
 from tools.binary_extensions import BINARY_EXTENSIONS
 from agent.file_safety import get_write_denied_error
 from tools.file_operations_common import (
@@ -32,6 +33,22 @@ from tools.file_operations_lint import LINTERS_INPROC, LintMixin, _FAIL_CLOSED_I
 from tools.file_operations_search import SearchMixin
 
 logger = logging.getLogger(__name__)
+
+
+def _confined_scope(path: str, *, verb: str = "write"):
+    """Return the active dispatcher scope or a fail-closed error."""
+    try:
+        return _confinement.active_scope(), None
+    except _confinement.ConfinementError as exc:
+        return None, f"Refusing to {verb} '{path}': {exc}"
+
+
+def _confined_target_error(scope, path: str, verb: str) -> Optional[str]:
+    try:
+        scope.verify(path, verb=verb)
+    except _confinement.ConfinementError as exc:
+        return f"Refusing to {verb} '{path}': {exc}"
+    return None
 
 # Controller home; SearchMixin reads it (tests monkeypatch it here).
 _HOME = str(Path.home())
@@ -105,7 +122,8 @@ class FileOperations(ABC):
         """Whole file as a plain string: no pagination, line numbers or clamping."""
 
     @abstractmethod
-    def write_file(self, path: str, content: str, pre_content: Optional[str] = None) -> WriteResult:
+    def write_file(self, path: str, content: str, pre_content: Optional[str] = None,
+                   *, expect_preimage: Optional[tuple] = None) -> WriteResult:
         """Write content to a file, creating directories as needed."""
 
     @abstractmethod
@@ -1008,6 +1026,18 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         denied = get_write_denied_error(path, verb="Delete")
         if denied:
             return WriteResult(error=denied)
+        scope, scope_error = _confined_scope(path, verb="delete")
+        if scope_error:
+            return WriteResult(error=scope_error)
+        if scope is not None:
+            target_error = _confined_target_error(scope, path, "delete")
+            if target_error:
+                return WriteResult(error=target_error)
+            try:
+                scope.delete(path)
+            except _confinement.ConfinementError as exc:
+                return WriteResult(error=f"Refusing to delete '{path}': {exc}")
+            return WriteResult()
         # Path baked in via repr() for shell-independent quoting; no
         # ``unlink(missing_ok=True)`` (a 3.7 remote interpreter lacks it).
         snippet = (
@@ -1038,6 +1068,19 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             denied = get_write_denied_error(p, verb="Move")
             if denied:
                 return WriteResult(error=denied)
+        scope, scope_error = _confined_scope(src, verb="move")
+        if scope_error:
+            return WriteResult(error=scope_error)
+        if scope is not None:
+            for endpoint in (src, dst):
+                target_error = _confined_target_error(scope, endpoint, "move")
+                if target_error:
+                    return WriteResult(error=target_error)
+            try:
+                scope.move(src, dst)
+            except _confinement.ConfinementError as exc:
+                return WriteResult(error=f"Refusing to move '{src}' -> '{dst}': {exc}")
+            return WriteResult()
         result = self._exec(f"mv {self._escape_shell_arg(src)} {self._escape_shell_arg(dst)}")
         if result.exit_code != 0:
             return WriteResult(error=f"Failed to move {src} -> {dst}: {result.stdout}")
@@ -1190,7 +1233,8 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             pass
         return None, None
 
-    def write_file(self, path: str, content: str, pre_content: Optional[str] = None) -> WriteResult:
+    def write_file(self, path: str, content: str, pre_content: Optional[str] = None,
+                   *, expect_preimage: Optional[tuple] = None) -> WriteResult:
         """Write content atomically, creating parent directories as needed.
 
         Order: deny list → lone-surrogate refusal → fail-closed syntax gate on the
@@ -1205,6 +1249,13 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         denied = get_write_denied_error(path)
         if denied:
             return WriteResult(error=denied)
+        scope, scope_error = _confined_scope(path)
+        if scope_error:
+            return WriteResult(error=scope_error)
+        if scope is not None:
+            target_error = _confined_target_error(scope, path, "write")
+            if target_error:
+                return WriteResult(error=target_error)
         refused = self._reject_unencodable(path, content)
         if refused is not None:
             return refused
@@ -1232,9 +1283,15 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         # this content, so these are the bytes on disk; the early rejection above
         # guarantees this cannot raise.
         content_bytes = content.encode("utf-8", "surrogateescape")
-        write_result = self._atomic_write(path, content)
-        if write_result.exit_code != 0:
-            return WriteResult(error=f"Failed to write file: {write_result.stdout}")
+        if scope is not None:
+            try:
+                scope.write_bytes(path, content_bytes, expect_preimage=expect_preimage)
+            except _confinement.ConfinementError as exc:
+                return WriteResult(error=f"Refusing to write '{path}': {exc}")
+        else:
+            write_result = self._atomic_write(path, content)
+            if write_result.exit_code != 0:
+                return WriteResult(error=f"Failed to write file: {write_result.stdout}")
         content_verified, verify_error = self._verify_written_hash(path, content_bytes)
         if verify_error is not None:
             return verify_error
@@ -1301,6 +1358,13 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         denied = get_write_denied_error(path)
         if denied:
             return PatchResult(error=denied)
+        scope, scope_error = _confined_scope(path, verb="patch")
+        if scope_error:
+            return PatchResult(error=scope_error)
+        if scope is not None:
+            target_error = _confined_target_error(scope, path, "patch")
+            if target_error:
+                return PatchResult(error=target_error)
         read_result = self._cat(path)
         if read_result.exit_code != 0:
             return PatchResult(error=f"Failed to read file: {path}")
@@ -1308,6 +1372,12 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         # first-line match); the raw read becomes write_file's pre_content.
         raw_content = read_result.stdout
         content, _ = _strip_bom(raw_content)
+        preimage_key = None
+        if scope is not None:
+            try:
+                preimage_key = scope.preimage_key(path)
+            except _confinement.ConfinementError as exc:
+                return PatchResult(error=f"Refusing to patch '{path}': {exc}")
 
         from tools.fuzzy_match import fuzzy_find_and_replace
         new_content, match_count, _strategy, error = fuzzy_find_and_replace(
@@ -1319,7 +1389,12 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         file_ending = _detect_line_ending(content)
         if file_ending:
             new_content = _normalize_line_endings(new_content, file_ending)
-        write_result = self.write_file(path, new_content, pre_content=raw_content)
+        write_result = self.write_file(
+            path,
+            new_content,
+            pre_content=raw_content,
+            expect_preimage=preimage_key,
+        )
         if write_result.error:
             return PatchResult(error=f"Failed to write changes: {write_result.error}")
         verify_error = self._verify_patch_persisted(path, new_content)

@@ -39,6 +39,8 @@ from agent import delegation_context
 from agent import dispatcher_identity as di
 from agent import workspace_confinement as wc
 from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_db_connect as kbc
+from hermes_cli import kanban_db_identity as kbi
 from hermes_cli import plugins as pmod
 from plugins.work_claims import core
 from tools.file_tools import patch_tool, write_file_tool
@@ -77,7 +79,7 @@ def _bind_worker(tmp_path, *, workspace: Path | None = None, db_path: Path | Non
     db_path = db_path or (tmp_path / "kanban.db")
     workspace = workspace or (tmp_path / "worker-ws")
     workspace.mkdir(parents=True, exist_ok=True)
-    with kb.connect_closing(db_path=db_path) as conn:
+    with kbc.connect_closing(db_path=db_path) as conn:
         task_id = kb.create_task(
             conn, title="stage 2b worker", assignee="tester",
             workspace_path=str(workspace),
@@ -86,7 +88,7 @@ def _bind_worker(tmp_path, *, workspace: Path | None = None, db_path: Path | Non
         conn.commit()
         claimed = kb.claim_task(conn, task_id)
         assert claimed is not None and claimed.current_run_id is not None
-        token = kb.issue_worker_identity(
+        token = kbi.issue_worker_identity(
             conn,
             task_id=task_id,
             run_id=int(claimed.current_run_id),
@@ -487,7 +489,7 @@ def test_the_worker_cannot_rewrite_the_kanban_database(tmp_path):
 def test_a_revoked_identity_stops_the_write_at_operation_time(worker):
     """Revocation must bite in the write itself: the pre-tool hook may have
     allowed this call before the run advanced."""
-    with kb.connect_closing(db_path=worker["db_path"]) as conn:
+    with kbc.connect_closing(db_path=worker["db_path"]) as conn:
         conn.execute(
             "UPDATE tasks SET current_run_id = ? WHERE id = ?",
             (worker["run_id"] + 99, worker["task_id"]),

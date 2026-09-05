@@ -104,6 +104,10 @@ def _install_plugin_debug_handler(force: bool = False) -> None:
 
 _install_plugin_debug_handler()
 
+
+class RequiredHookError(RuntimeError):
+    """Raised when a required execution-turn hook is not acknowledged."""
+
 VALID_HOOKS: Set[str] = {
     "pre_tool_call", "post_tool_call", "transform_terminal_output", "transform_tool_result",
     # transform_llm_output: return a replacement string (first non-None wins) or None.
@@ -124,6 +128,7 @@ VALID_HOOKS: Set[str] = {
     # error_body may be unredacted.
     "transform_api_error_classification", "on_session_start", "on_session_end",
     "on_session_finalize", "on_session_reset",
+    "on_execution_turn_begin", "on_execution_turn_renew", "on_execution_turn_end",
     # on_skill_lifecycle: successful skill lifecycle facts (local skill name visible to plugins).
     "on_skill_lifecycle", "subagent_start", "subagent_stop",
     # pre_gateway_dispatch: once per incoming MessageEvent, after the internal-event guard, BEFORE
@@ -1677,6 +1682,11 @@ def invoke_hook(hook_name: str, **kwargs: Any) -> List[Any]:
     callbacks registered by user plugins (tracking #64178).
     """
     return _delivery_manager().invoke_hook(hook_name, **kwargs)
+
+
+def invoke_required_hook(hook_name: str, **kwargs: Any) -> List[Mapping[str, Any]]:
+    """Invoke a fail-closed execution-turn hook after lazy discovery."""
+    return _delivery_manager().invoke_required_hook(hook_name, **kwargs)
 
 
 def render_system_prompt_sections(session_info: Mapping[str, Any]) -> List[RenderedPluginSystemPromptSection]:

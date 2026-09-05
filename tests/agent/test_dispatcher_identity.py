@@ -27,6 +27,9 @@ import pytest
 
 from agent import dispatcher_identity as di
 from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_db_connect as kbc
+from hermes_cli import kanban_db_dispatch as kbd
+from hermes_cli import kanban_db_identity as kbi
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -45,7 +48,7 @@ def _reset_identity():
 def make_board_task(db_path: Path, workspace: Path, *, title: str) -> dict:
     """Create a task and take it through the real ready -> running claim."""
     workspace.mkdir(parents=True, exist_ok=True)
-    with kb.connect_closing(db_path=Path(db_path)) as conn:
+    with kbc.connect_closing(db_path=Path(db_path)) as conn:
         task_id = kb.create_task(
             conn,
             title=title,
@@ -74,8 +77,8 @@ def board(tmp_path, monkeypatch):
 
 def _issue(board, *, pid, ttl_seconds=3600, run_id=None, workspace=None):
     """Issue a real identity token exactly as the dispatcher does."""
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
-        return kb.issue_worker_identity(
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
+        return kbi.issue_worker_identity(
             conn,
             task_id=board["task_id"],
             run_id=board["run_id"] if run_id is None else run_id,
@@ -198,7 +201,7 @@ def test_real_subprocess_handshake_binds_exact_identity(board):
 
 def test_token_is_stored_hashed_never_in_plaintext(board):
     token = _issue(board, pid=os.getpid())
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         rows = conn.execute("SELECT * FROM worker_identities").fetchall()
     assert len(rows) == 1
     blob = json.dumps([dict(r) for r in rows])
@@ -237,7 +240,7 @@ def test_valid_worker_token_presented_to_the_wrong_board_is_rejected(board, tmp_
     token = _issue(board, pid=os.getpid())
     wrong_db = tmp_path / "wrong-board" / "kanban.db"
     wrong_db.parent.mkdir()
-    with kb.connect_closing(db_path=wrong_db):
+    with kbc.connect_closing(db_path=wrong_db):
         pass
 
     result = _run_child(
@@ -261,11 +264,11 @@ def test_token_is_consumed_exactly_once(board):
     """A stolen token replayed by a second process is refused."""
     token = _issue(board, pid=os.getpid())
     digest = di.token_digest(token)
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
-        first = kb.consume_worker_identity(conn, digest)
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
+        first = kbi.consume_worker_identity(conn, digest)
     assert first is not None
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
-        second = kb.consume_worker_identity(conn, digest)
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
+        second = kbi.consume_worker_identity(conn, digest)
     assert second is None
 
 
@@ -318,8 +321,8 @@ def test_pid_reuse_with_stale_start_identity_is_denied(board):
 def _issue_with_start_override(board, *, pid, proc_start):
     """Mint a row whose recorded kernel start deliberately does not match."""
     token = di.new_token()
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
-        kb.record_worker_identity(
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
+        kbi.record_worker_identity(
             conn,
             task_id=board["task_id"],
             run_id=board["run_id"],
@@ -336,9 +339,9 @@ def test_identity_cannot_be_minted_for_a_dead_pid(board):
     """No kernel start identity -> fail closed, no row, no token."""
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait()
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         with pytest.raises(di.IdentityBindError):
-            kb.issue_worker_identity(
+            kbi.issue_worker_identity(
                 conn,
                 task_id=board["task_id"],
                 run_id=board["run_id"],
@@ -397,7 +400,7 @@ def test_worker_blocks_until_the_identity_row_exists(board):
     def _issue_late(pid):
         # The child is already running; prove no row exists for it yet, then
         # mint one.  A child that had already bound would have failed above.
-        with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+        with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
             observed["rows_before"] = conn.execute(
                 "SELECT COUNT(*) FROM worker_identities"
             ).fetchone()[0]
@@ -469,12 +472,12 @@ def _spawn_through_dispatcher(board, monkeypatch, tmp_path):
     probe_out = tmp_path / "identity_probe.json"
     monkeypatch.setenv("IDENTITY_PROBE_OUT", str(probe_out))
     monkeypatch.setattr(
-        kb, "_resolve_hermes_argv",
+        kbd, "_resolve_hermes_argv",
         lambda: [sys.executable, "-c", _SPAWNED_WORKER_SOURCE.format(repo=str(REPO_ROOT))],
     )
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         task = kb.get_task(conn, board["task_id"])
-    pid = kb._default_spawn(task, str(board["workspace"]))
+    pid = kbd._default_spawn(task, str(board["workspace"]))
     assert pid is not None
     deadline = time.time() + 30
     while time.time() < deadline and not probe_out.exists():
@@ -499,7 +502,7 @@ def test_real_dispatcher_spawn_binds_the_worker_identity(
     # And the dispatcher really did build a worker command line.
     assert "chat" in record["argv_tail"]
 
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         row = conn.execute(
             "SELECT worker_pid, consumed FROM worker_identities"
         ).fetchone()
@@ -520,7 +523,7 @@ def test_real_dispatcher_spawn_commits_the_row_before_sending_the_token(
     board = make_board_task(spawn_env, tmp_path / "ws" / "spawned", title="spawned")
     events: list[tuple[str, object]] = []
 
-    real_issue = kb.issue_worker_identity
+    real_issue = kbi.issue_worker_identity
     real_send = di.WorkerHandshake.send
 
     def _traced_issue(conn, **kwargs):
@@ -528,7 +531,7 @@ def test_real_dispatcher_spawn_commits_the_row_before_sending_the_token(
         token = real_issue(conn, **kwargs)
         # Read through a *separate* connection: only a committed row is
         # visible, so this proves durability rather than transaction state.
-        with kb.connect_closing(db_path=Path(board["db_path"])) as probe:
+        with kbc.connect_closing(db_path=Path(board["db_path"])) as probe:
             row = probe.execute(
                 "SELECT worker_pid, proc_start FROM worker_identities"
             ).fetchone()
@@ -536,14 +539,14 @@ def test_real_dispatcher_spawn_commits_the_row_before_sending_the_token(
         return token
 
     def _traced_send(self, token, *, db_path):
-        with kb.connect_closing(db_path=Path(board["db_path"])) as probe:
+        with kbc.connect_closing(db_path=Path(board["db_path"])) as probe:
             row = probe.execute(
                 "SELECT worker_pid, proc_start FROM worker_identities"
             ).fetchone()
         events.append(("send", None if row is None else tuple(row)))
         return real_send(self, token, db_path=db_path)
 
-    monkeypatch.setattr(kb, "issue_worker_identity", _traced_issue)
+    monkeypatch.setattr(kbi, "issue_worker_identity", _traced_issue)
     monkeypatch.setattr(di.WorkerHandshake, "send", _traced_send)
 
     pid, record = _spawn_through_dispatcher(board, monkeypatch, tmp_path)
@@ -572,12 +575,12 @@ def test_real_dispatcher_spawn_fails_closed_when_identity_cannot_be_issued(
     def _refuse(*_a, **_k):
         raise RuntimeError("kernel start identity unavailable")
 
-    monkeypatch.setattr(kb, "issue_worker_identity", _refuse)
+    monkeypatch.setattr(kbi, "issue_worker_identity", _refuse)
     _pid, record = _spawn_through_dispatcher(board, monkeypatch, tmp_path)
 
     assert record["bound"] is False
     assert "without a token" in record["error"]
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         count = conn.execute("SELECT COUNT(*) FROM worker_identities").fetchone()[0]
     assert count == 0
 
@@ -592,10 +595,10 @@ _STARTUP_GATE_SOURCE = textwrap.dedent(
     """
     import json, os, sys
     sys.path.insert(0, {repo!r})
-    from hermes_cli.main import _bind_dispatcher_worker_identity
+    from hermes_cli.dispatcher_worker_identity import bind_dispatcher_worker_identity
     from agent import dispatcher_identity as di
 
-    _bind_dispatcher_worker_identity()
+    bind_dispatcher_worker_identity()
     # Only reached when the gate allowed startup to continue.
     print(json.dumps({{"continued": True, "bound": di.get_bound() is not None}}))
     """
@@ -761,7 +764,7 @@ def test_revalidate_rejects_a_run_that_moved_on(board):
     token = _issue(board, pid=os.getpid())
     bound = di.bind_token(token, db_path=board["db_path"])
     assert di.revalidate(bound) is None
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         conn.execute(
             "UPDATE tasks SET current_run_id = ? WHERE id = ?",
             (board["run_id"] + 1, board["task_id"]),
@@ -777,7 +780,7 @@ def test_revalidate_rejects_a_workspace_that_moved(board, tmp_path):
     assert di.revalidate(bound) is None
     moved = tmp_path / "moved"
     moved.mkdir()
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         conn.execute(
             "UPDATE tasks SET workspace_path = ? WHERE id = ?",
             (str(moved), board["task_id"]),

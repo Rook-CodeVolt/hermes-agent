@@ -29,6 +29,13 @@ def invoke_hook(hook_name: str, **kwargs: Any) -> List[Any]:
     return _plugin_hooks(hook_name, **kwargs)
 
 
+def invoke_required_hook(hook_name: str, **kwargs: Any) -> List[Any]:
+    """Invoke a plugin hook whose callbacks must acknowledge persistence."""
+    from hermes_cli import plugins
+
+    return plugins.invoke_required_hook(hook_name, **kwargs)
+
+
 def has_hook(hook_name: str) -> bool:
     """Return whether a first-party observer or plugin consumes a hook."""
     try:

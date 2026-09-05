@@ -44,6 +44,8 @@ import yaml
 from agent import delegation_context
 from agent import dispatcher_identity as di
 from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_db_connect as kbc
+from hermes_cli import kanban_db_identity as kbi
 from hermes_cli import plugins as pmod
 from plugins.work_claims import core
 
@@ -85,7 +87,7 @@ def manager():
 def _claimed_task(db_path: Path, workspace: Path, *, title: str = "dispatcher worker task") -> dict:
     """Create a task and take it through the real ready -> running claim."""
     workspace.mkdir(parents=True, exist_ok=True)
-    with kb.connect_closing(db_path=db_path) as conn:
+    with kbc.connect_closing(db_path=db_path) as conn:
         task_id = kb.create_task(
             conn, title=title, assignee="tester", workspace_path=str(workspace)
         )
@@ -106,8 +108,8 @@ def bind_worker(tmp_path, *, workspace_name: str = "worker-ws", ttl_seconds: int
     db_path = tmp_path / "kanban.db"
     workspace = tmp_path / workspace_name
     board = _claimed_task(db_path, workspace)
-    with kb.connect_closing(db_path=db_path) as conn:
-        token = kb.issue_worker_identity(
+    with kbc.connect_closing(db_path=db_path) as conn:
+        token = kbi.issue_worker_identity(
             conn,
             task_id=board["task_id"],
             run_id=board["run_id"],
@@ -327,7 +329,7 @@ def test_run_advancing_stops_authorising(tmp_path, manager):
     args = {"path": str(board["workspace"] / "ok.txt"), "content": "x"}
     _assert_allowed(manager, "write_file", args)
 
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         conn.execute(
             "UPDATE tasks SET current_run_id = ? WHERE id = ?",
             (board["run_id"] + 99, board["task_id"]),
@@ -345,7 +347,7 @@ def test_workspace_reassignment_stops_authorising(tmp_path, manager):
 
     moved = tmp_path / "moved-ws"
     moved.mkdir()
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         conn.execute(
             "UPDATE tasks SET workspace_path = ? WHERE id = ?",
             (str(moved), board["task_id"]),
@@ -361,7 +363,7 @@ def test_deleted_task_stops_authorising(tmp_path, manager):
     args = {"path": str(board["workspace"] / "ok.txt"), "content": "x"}
     _assert_allowed(manager, "write_file", args)
 
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (board["task_id"],))
         conn.commit()
 
@@ -375,7 +377,7 @@ def test_a_revoked_identity_denies_on_default_deny_terms(tmp_path, manager):
     permits besides the confinable mutators, never the host's looser
     mutating/non-mutating classification."""
     board = bind_worker(tmp_path)
-    with kb.connect_closing(db_path=Path(board["db_path"])) as conn:
+    with kbc.connect_closing(db_path=Path(board["db_path"])) as conn:
         conn.execute(
             "UPDATE tasks SET current_run_id = ? WHERE id = ?",
             (board["run_id"] + 99, board["task_id"]),

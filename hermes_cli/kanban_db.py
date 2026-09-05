@@ -1032,6 +1032,22 @@ CREATE TABLE IF NOT EXISTS kanban_notify_subs (
     PRIMARY KEY (task_id, platform, chat_id, thread_id)
 );
 
+-- One single-use identity per dispatcher-spawned worker invocation. The
+-- secret token is never persisted; only its SHA-256 digest is stored.
+CREATE TABLE IF NOT EXISTS worker_identities (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id        TEXT    NOT NULL,
+    run_id         INTEGER NOT NULL,
+    workspace_path TEXT    NOT NULL,
+    worker_pid     INTEGER NOT NULL,
+    proc_start     INTEGER NOT NULL,
+    token_sha256   TEXT    NOT NULL UNIQUE,
+    issued_at      INTEGER NOT NULL,
+    expires_at     INTEGER NOT NULL,
+    consumed_at    INTEGER,
+    consumed       INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_status          ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_links_child           ON task_links(child_id);
@@ -1042,6 +1058,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_task             ON task_runs(task_id, start
 CREATE INDEX IF NOT EXISTS idx_runs_status           ON task_runs(status);
 CREATE INDEX IF NOT EXISTS idx_attachments_task      ON task_attachments(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_id);
+CREATE INDEX IF NOT EXISTS idx_worker_identities_task ON worker_identities(task_id, issued_at);
 """
 
 
