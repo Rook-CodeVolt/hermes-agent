@@ -12,12 +12,12 @@ Candidate construction and proof are scratch-only. They do not authorize or perf
 
 Release shape
 
-- Runtime: full Git commit and tree, activated only through `hermes update --branch <approved-channel> --yes --keep-stash` after remote ref equality.
-- Plugin: exact root plus `clara`, `daniel`, `elias`, `hannah`, `maya`, `oliver`, `rook`, and `sophie` destinations. No ambient discovery or wildcards.
+- Runtime: full Git commit and tree, activated only through `hermes update --branch candidate/codevolt-control-plane-rc4-continuity-source --yes --keep-stash` after both the local source ref and the canonical remote channel resolve exactly to `manifest.source_commit`. The separate freeze ref is never an update channel.
+- Plugin: exact accepted work-claims 1.6.1 bytes at root plus `clara`, `daniel`, `elias`, `hannah`, `maya`, `oliver`, `rook`, and `sophie` destinations. No ambient discovery, wildcards, or 1.6.0 downgrade is admitted.
 - Helpers/checks: work-claims installer, continuity guard, the manifest-bound canonical `hermes_state_common.py`, launchd canary helpers, tests, contract and incident registry.
 - Launchd: the reviewed continuity-guard plist as payload; the proof uses only the separately labelled synthetic canary.
 - Migration: closed schema-4-to-schema-5 descriptor.
-- Recovery: exact-preimage restoration inside a failed transaction; accepted rollback is forward-only through a new release.
+- Recovery: exact-preimage restoration inside a failed payload transaction plus the explicit reverse runtime/payload/process/state rollback in `ACTIVATION_MANIFEST.md` for any later activation-gate failure. A future accepted release remains forward-only; this operational rollback restores the immediate pre-activation state and is not labelled as a new accepted release.
 
 Build
 
@@ -68,7 +68,7 @@ Transaction and recovery
 
 The installer validates the closed canonical manifest, exact archive member set, content hashes, lengths, profile roster, destination paths and modes before the first target write. Each changed file is staged in its destination directory and atomically replaced. Any exception restores all previous bytes and modes and removes targets that were absent. A repeated install skips byte-and-mode-identical files and preserves their mtimes.
 
-On a failed live activation, the authorized operator would restore the exact runtime/plugin/launchd/state preimages and prior process state inside the same transaction, stop, and reconcile. That recovery does not become an accepted release. Long-term correction is a new manifest-bound release naming the immediate prior release and restoring compatible accepted payload bytes.
+Live activation is one ordered runtime-update, payload-install, process-restart, and health-proof transaction. The literal installer command, fixed source/freeze ref roles, complete preimage inventory, conditional restart rule, and strict reverse rollback are in `ACTIVATION_MANIFEST.md`. On failure, the authorized operator restores exact runtime/venv, all changed manifest destinations, continuity state, and prior process state; preserves failed state/log evidence; stops on any restoration mismatch; and does not mutate a board. That recovery does not become an accepted release. Long-term correction is a new manifest-bound release naming the immediate prior release and restoring compatible accepted payload bytes.
 
 Evidence and handoff
 

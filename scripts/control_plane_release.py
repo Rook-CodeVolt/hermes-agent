@@ -1255,6 +1255,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     build_parser.add_argument("--repo", type=Path, required=True)
     build_parser.add_argument("--spec", type=Path, required=True)
     build_parser.add_argument("--output", type=Path, required=True)
+    install_parser = subparsers.add_parser("install", help="transactionally install a frozen release archive")
+    install_parser.add_argument("--archive", type=Path, required=True)
+    install_parser.add_argument("--root", type=Path, required=True)
     gate_parser = subparsers.add_parser("validate-gate", help="strictly validate a typed gate receipt")
     gate_parser.add_argument("--contract", type=Path, required=True)
     gate_parser.add_argument("--input", type=Path, required=True)
@@ -1272,6 +1275,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "archive_sha256": hashlib.sha256(result.archive_bytes).hexdigest(),
                 "verdict": "PASS",
             }
+            print(_canonical(receipt).decode("utf-8"), end="")
+            return 0
+        if args.command == "install":
+            receipt = install_release(args.archive, args.root)
             print(_canonical(receipt).decode("utf-8"), end="")
             return 0
         if args.command == "validate-gate":

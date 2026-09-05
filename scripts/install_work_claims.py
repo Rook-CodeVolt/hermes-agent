@@ -91,7 +91,7 @@ IMPL_MODULE_NAME = "_work_claims_installer_impl"
 
 # sha256 of the reviewed plugins/work_claims/installer.py. See PROVENANCE.md.
 CANONICAL_INSTALLER_SHA256 = (
-    "b258084c1f59f1b84a78fce5e5b7d130cc31b37ea8dbdd6ccd349e01277cfe16"
+    "9a6565f157eabac9cf03ba0c52fee73f07236d180706794ff41ae4a3d6d8bd6f"
 )
 
 _PLUGIN_NAME = "work-claims"

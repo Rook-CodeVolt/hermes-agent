@@ -1444,3 +1444,68 @@ This candidate requires a new independent Maya security review bound to the
 exact commit immediately above (after the MANIFEST+PROVENANCE fixup). After
 Maya approves, the bounded Daniel-only gateway restart + canary authorized by
 Rook on 2026-09-04 09:21 applies to this candidate.
+
+## Data-integrity correction generation 9 — orphaned claim targets
+
+### Root cause and scope
+
+SQLite foreign-key enforcement is disabled by default per connection.
+`core._connect()` created `claim_targets.claim_id REFERENCES claims(claim_id)
+ON DELETE CASCADE` but did not enable `PRAGMA foreign_keys`, so the declared
+cascade was inert on plugin connections. An out-of-band connection using the
+same default, or a partial/direct status transition, could therefore leave a
+`claim_targets` row with a missing or non-active parent. The conflict query
+correctly ignored that row, but `claim_targets.target` remained a primary key,
+so the later insert failed with `UNIQUE constraint failed:
+claim_targets.target`.
+
+This slice is a minimal delta on accepted rc3 baseline
+`b4048f0cf7adaa325e56a7e90d1aed1ea63bd14d`: every plugin connection enables
+and verifies `PRAGMA foreign_keys=ON`; every `acquire()` reconciles target rows
+inside its existing `BEGIN IMMEDIATE` transaction by deleting only rows whose
+parent is absent or not `status='active'`; plugin version is `1.6.1`.
+Reconciliation is deliberately on acquisition, not every connection, to avoid
+adding a write to execution-lease read/renew/end hot paths.
+
+### Regression evidence
+
+Before the implementation, all three new defect tests failed against rc3:
+missing-parent and released-parent reacquisitions returned the exact `UNIQUE
+constraint failed: claim_targets.target` error, and `PRAGMA foreign_keys` read
+back `0`. The unchanged active-claim control passed and continued to block a
+competing acquisition.
+
+After the fix, the tests prove:
+
+- an out-of-band FK-off delete can leave a real orphan, after which acquisition
+  from a second profile through the exact `shared_root()/work-claims.db` path
+  self-heals and succeeds;
+- a target whose parent is present but non-active self-heals and succeeds;
+- every plugin connection reads `PRAGMA foreign_keys=1` and parent deletion
+  cascades;
+- a genuinely active parent still blocks a competing acquisition.
+
+The live `/Users/rook/.hermes/work-claims.db` was inspected read-only before
+candidate work. No WAL/SHM files were present, and the stable snapshot reported
+zero missing/non-active-parent target rows and four active target rows. No live
+plugin, profile, database row or gateway was mutated. Promotion, gateway
+restart, and post-restart live readback remain an explicit post-review
+activation gate; they are not claimed by this candidate.
+
+### Final hashes
+
+| artifact | sha256 |
+|---|---|
+| `plugins/work_claims/plugin.yaml` | `e6127feb837fe97621448ac8e5b68dfae585951088e6316a414c1c4c65da5fbb` |
+| `plugins/work_claims/__init__.py` (unchanged) | `80e4333a17562145e02f542edaa0ceabf83b7e3ec55e2cb18fbd4e1d127c0bc5` |
+| `plugins/work_claims/core.py` | `d79e4b90ebc0884b95e8b617bc1cab565bcf7c92b98c3d376aca2af30f6f587f` |
+| `plugins/work_claims/README.md` | `854e8f1e082dbe28556a4ff7cb7f7cf583db2c545d5812a1eb3a3f2e7bc2e729` |
+| `plugins/work_claims/test_work_claims.py` | `f7a395f53ffd36a10bc974ea89b57a74108aef52b87e859aeaa3cedb8b85c377` |
+| `plugins/work_claims/MANIFEST.json` | `c6c19634ddb187b1cd206eaaff790ca050eabcfc60c04b023102ca379ae10d02` |
+| `plugins/work_claims/installer.py` | `9a6565f157eabac9cf03ba0c52fee73f07236d180706794ff41ae4a3d6d8bd6f` |
+| `scripts/install_work_claims.py` | `10355fbcb6eac7fb3439399e43e9b7170d100140e365b1d9c53d4bb9614b39b8` |
+| `~/.hermes/scripts/install_work_claims.py` (admitted migration source, read-only) | `dc20b4cdc08cf605d5183b2167c4da592c9ad5ad4ada3c3861826f101367f91e` |
+
+No file under `~/.hermes/plugins`, `~/.hermes/profiles`, or
+`~/.hermes/scripts` was changed. Independent Maya review is required before
+any promotion.

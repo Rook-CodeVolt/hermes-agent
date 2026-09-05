@@ -1,15 +1,23 @@
-# Multi-board liveness guard rc4 — activation and rollback
+# Multi-board liveness guard rc4 remediation — activation and rollback
 
-This repository-only candidate replaces rc3. It was built from the exact source commit and tree recorded in `release/manifest.json`; no live path, board, launchd job, profile configuration, credential, VPS, or website resource was changed while producing it.
+This repository-only candidate replaces the rejected rc4 freeze. It was built from the exact source commit and tree recorded in `release/manifest.json`; candidate construction did not mutate a live Hermes home, board, launchd job, profile configuration, credential, VPS, or website resource.
 
-## Bounded correction
+## Identity model
 
-- `scripts/codevolt_continuity_guard.py` imports board operations from `hermes_cli.kanban_db` and the supported connection context manager from `hermes_cli.kanban_db_connect`. Every connection still passes the selected board explicitly and all reads remain non-mutating.
-- `scripts/hermes_state_common.py` is now a manifest-bound helper payload. It is installed in the same transaction as the guard so the script directory cannot shadow the canonical runtime with a stale helper missing `stat_db_file_identity`.
-- The installed-shape gate places the packaged script helper ahead of an immutable export of the manifest-bound runtime and imports both `hermes_state` and `hermes_state_registry`. A legacy helper now fails with `INSTALLED_SHAPE_IMPORT_FAILED`.
-- `config.yaml` and `Library/LaunchAgents/com.codevolt.continuity-guard.plist` are unchanged. The reviewed plist already supplies the mutually consistent pair `HERMES_PROFILE=rook` and `HERMES_HOME=/Users/rook/.hermes/profiles/rook`. The guard's child environment preserves that explicit `HERMES_HOME`; therefore the reported fallback warning cannot be caused by these candidate bytes. Treat it as stale output or evidence from a different spawner unless a fresh post-activation cycle reproduces it; do not expand this activation into a config/plist edit.
+Two durable refs have different, non-interchangeable roles:
 
-## Reviewed destination bytes
+- `refs/heads/candidate/codevolt-control-plane-rc4-continuity-source` resolves exactly to `manifest.source_commit`. It is the only value admitted as `manifest.release_channel` and as the runtime update channel.
+- `refs/heads/candidate/codevolt-control-plane-rc4-continuity-freeze` resolves to the later freeze commit that contains `release/manifest.json`, `release/release.tar`, and final receipts. It must not be passed to `hermes update`.
+
+Before activation, the authorized operator must fetch or publish the source channel through the canonical runtime repository's `origin` without moving it and must prove that both local `git rev-parse` and `git ls-remote origin` return `manifest.source_commit`. A missing or moved remote channel is a stop condition, not permission to substitute the freeze ref or a commit with similar content.
+
+## Scope correction
+
+The release remains a closed 78-destination control-plane unit, but every work-claims destination now carries the exact independently reviewed 1.6.1 bytes: plugin `e6127feb…`, package entrypoint `80e4333a…`, core `d79e4b90…`, README `854e8f1e…`, and regression test `f7a395f5…`. Installing over the accepted eight-profile 1.6.1 fleet is therefore idempotent for those profile payloads; it cannot downgrade them to 1.6.0. Root helpers, checks, fixtures, documentation, and launchd payloads remain explicit manifest destinations and may change only through the one transactional installer command below.
+
+`config.yaml` is not a destination. The reviewed plist already supplies `HERMES_PROFILE=rook` and `HERMES_HOME=/Users/rook/.hermes/profiles/rook`; no config or plist edit is authorized outside an exact manifest byte change.
+
+## Reviewed continuity destination bytes
 
 ```text
 0e74fc27b14c3101392ddb4aa1d099a016ef86997678f77b762499d068d8054b  scripts/codevolt_continuity_guard.py
@@ -20,34 +28,85 @@ e0ac543dac9f45ad2dd10320c1e40fdd81408e2e0def8f18b84eeda954c04956  scripts/tests/
 19953276caf699de0d22b4f214616cc48a6e4386da4944d0cc4e9e5d0750db42  Library/LaunchAgents/com.codevolt.continuity-guard.plist
 ```
 
-The manifest is authoritative for every other payload hash, byte length, destination, mode, dependency order, source commit, and source tree. The deterministic archive contains only `manifest.json` and one content-addressed member per unique payload.
+The manifest is authoritative for all 78 destination hashes, byte lengths, modes, dependency order, source identity, and archive payload members.
 
-## Activation transaction — not performed here
+## One ordered activation transaction — not performed here
 
-1. Require Maya's literal PASS for the exact frozen HEAD/tree, source commit/tree, manifest SHA-256, archive SHA-256, and payload table. Confirm the durable release channel still resolves to the manifest's full `source_commit`. Stop on any mismatch.
-2. Confirm CV-A01 `t_13b90c53` remains `done` with a literal PASS and the exact-task dispatch prerequisite remains present. The guard fails closed if either condition is absent.
-3. Run the frozen isolated canary and require its two observations at least 60 seconds apart, successful bootout, and post-bootout absence proof. Do not use an older receipt as promotion evidence.
-4. Before installation, capture exact bytes and modes for every manifest destination that exists, plus absence for destinations that do not. Store this preimage outside the target tree and verify every copied backup with both `shasum -a 256` and `cmp`. At minimum this includes the current guard, state helper, live test, and every other destination the installer reports as changed. Stop if any readback differs.
-5. Invoke `scripts.control_plane_release.install_release()` on the frozen `release/release.tar` with install root `/Users/rook/.hermes`. This is one ordered transaction: every changed destination is staged beside its target and atomically replaced; any exception restores changed files in reverse order, including original modes, removes newly created files/directories, and verifies the exact preimage shape before returning failure. Never copy the guard/helper/test separately.
-6. Read back every manifest destination. Require manifest SHA-256, byte length, mode, `shasum -a 256`, and `cmp` against the corresponding archive payload to match. Run the installed-shape gate against the same frozen runtime commit/tree.
-7. Because the plist path and bytes are unchanged, reload `com.codevolt.continuity-guard` only if installation actually changed the guard or helper path/bytes. Do not reload any gateway merely because the manifest contains the unchanged fleet payload.
-8. Run the live regression exactly from the installed tree:
+The exact sequence is supported runtime update with its updater-owned fleet restart, payload transaction, continuity-guard activation, then health proof. Do not reorder it and do not copy individual files.
+
+1. Require Maya's literal PASS for the exact freeze commit/tree, source commit/tree, manifest SHA-256, archive SHA-256, and all payload hashes. Require CV-A01 `t_13b90c53` and the exact-task dispatch prerequisite to remain accepted. Run the frozen isolated launchd canary before any mutation and require two successful observations at least 60 seconds apart, successful bootout, and post-bootout absence proof. Drain one-shot workers for every affected profile.
+2. Set the fixed transaction paths and identities:
 
    ```sh
-   /Users/rook/.hermes/hermes-agent/venv/bin/python -m pytest -q /Users/rook/.hermes/release-checks/test_codevolt_continuity_guard.py
+   ROOT=/Users/rook/.hermes
+   RUNTIME=/Users/rook/.hermes/hermes-agent
+   SOURCE_CHANNEL=candidate/codevolt-control-plane-rc4-continuity-source
+   SOURCE_REF=refs/heads/candidate/codevolt-control-plane-rc4-continuity-source
+   FREEZE_REF=refs/heads/candidate/codevolt-control-plane-rc4-continuity-freeze
+   TX=/Users/rook/.hermes/release-preimages/cv-control-plane-2026-09-05-rc4-remediation1
+   MANIFEST="$TX/candidate/manifest.json"
+   ARCHIVE="$TX/candidate/release.tar"
    ```
 
-9. Observe at least one full interval (at least 60 seconds). Require a fresh schema-5 state with `reconciled=true`, `status` in `SUCCESS_DECISIONS`, no board read error, and no deprecated `kanban_db.connect_closing` warning. A fresh HERMES_HOME fallback warning is a separate spawner fault and blocks completion pending diagnosis; it does not authorize config/plist edits.
+   `TX` must not exist. Create it mode 0700 and export the two frozen files with these literal commands:
 
-## Rollback transaction
+   ```sh
+   test ! -e "$TX"
+   install -d -m 0700 "$TX/candidate" "$TX/payload-preimage" "$TX/state-evidence"
+   git -C "$RUNTIME" show "$FREEZE_REF:operations/codevolt-control-plane/release/manifest.json" > "$MANIFEST"
+   git -C "$RUNTIME" show "$FREEZE_REF:operations/codevolt-control-plane/release/release.tar" > "$ARCHIVE"
+   shasum -a 256 "$MANIFEST" "$ARCHIVE"
+   ```
 
-1. Stop after the first failed gate; preserve the schema-5 state and logs as evidence. Do not delete state or mutate a board.
-2. If the watchdog was reloaded, unload it before restoring code. Restore every changed destination from the verified preimage in exact reverse dependency/install order. Remove destinations whose recorded preimage was absent. Restore original modes.
-3. Verify each restored file with both `cmp` and `shasum -a 256`, then verify the complete preimage shape. Any mismatch leaves rollback incomplete and the watchdog must remain unloaded.
-4. Move the schema-5 state file aside without deleting it before restarting rc3, because the prior guard may not understand candidate state. Inspect and preserve any pending alerts first.
+   Compare both printed digests with Maya's reviewed receipt before any live change.
+3. Capture complete preimages while the continuity guard is unloaded and before runtime or payload mutation:
+
+   - Require `git -C "$RUNTIME" status --porcelain=v1 --untracked-files=all` to be empty. Record runtime HEAD/tree, source/freeze ref values, `git stash list`, remote URL, and `git ls-remote origin "$SOURCE_REF"`.
+   - Archive `$RUNTIME/venv` with modes and symlinks, record the archive SHA-256, and record hashes/modes for every tracked runtime path. This is the dependency/runtime preimage; do not include or restore `.git/worktrees`.
+   - For every manifest destination, record exact relative path, existence/absence, bytes, mode, length, and SHA-256 in `$TX/payload-preimage`; verify each existing backup with both `shasum -a 256` and `cmp`.
+   - Record which of `default, clara, daniel, elias, hannah, maya, nova, oliver, rook, sophie` gateways were running and their PID/birth identities. Record whether `com.codevolt.continuity-guard` was loaded/running.
+   - Copy the continuity schema-state file and relevant logs into `$TX/state-evidence`, with hashes. These evidence copies are immutable; candidate state produced later is preserved separately on rollback.
+4. Prove the channel, then perform the supported runtime update exactly:
+
+   ```sh
+   test "$(git -C "$RUNTIME" rev-parse --verify "$SOURCE_REF^{commit}")" = "$(python "$RUNTIME/scripts/control_plane_release.py" --help >/dev/null 2>&1; python -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$MANIFEST")"
+   test "$(git -C "$RUNTIME" ls-remote --exit-code origin "$SOURCE_REF" | cut -f1)" = "$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$MANIFEST")"
+   "$RUNTIME/venv/bin/hermes" update --branch "$SOURCE_CHANNEL" --yes --keep-stash
+   ```
+
+   Immediately require runtime HEAD/tree to equal the manifest source commit/tree and require the checkout to be clean. Any update failure begins rollback; payload installation must not run.
+5. Install the frozen 78-destination payload with the literal transactional command:
+
+   ```sh
+   "$RUNTIME/venv/bin/python" "$RUNTIME/scripts/control_plane_release.py" install \
+     --archive "$ARCHIVE" \
+     --root "$ROOT" > "$TX/install-receipt.json"
+   ```
+
+   The installer stages beside each target, atomically replaces only byte/mode differences, and restores all changed destinations in reverse order on any exception. Require `verdict=PASS`, `destinations_installed=78`, and a changed count consistent with the preimage comparison.
+6. Read back every manifest destination and require exact path, existence, mode, byte length, SHA-256, and `cmp` against the archive payload. Run the installed-shape gate against the manifest source commit/tree. Stop on any mismatch.
+7. The supported updater in step 4 owns the Hermes fleet restart for an actual runtime code change; do not issue a second gateway restart after payload installation. Require its plan/readback to cover every gateway recorded running in step 3, including Nova, while preserving stopped profiles as stopped. If the runtime commit/tree was already exact and the updater performed no code/path change, require gateway PID/birth identities to remain unchanged. Reload `com.codevolt.continuity-guard` only if it was loaded before and installation changed the guard/helper/plist path, bytes, or mode; otherwise preserve its prior loaded/running state without gratuitous reload.
+8. Run the live regression:
+
+   ```sh
+   "$RUNTIME/venv/bin/python" -m pytest -q "$ROOT/release-checks/test_codevolt_continuity_guard.py"
+   ```
+
+9. Observe at least one complete interval of at least 60 seconds. Require fresh schema-5 state with `reconciled=true`, `status` in `SUCCESS_DECISIONS`, no board-read error, no deprecated `kanban_db.connect_closing` warning, exact post-activation process state, and no unplanned destination or profile change. A fresh HERMES_HOME fallback warning blocks completion and does not authorize config/plist edits.
+
+## Exact reverse rollback contract
+
+Rollback begins at the first failed gate and runs in strict reverse activation order.
+
+1. Preserve the failed candidate schema-state and logs under `$TX/state-evidence/failed-candidate`; never delete them and never mutate a board.
+2. Unload the continuity guard if activation loaded/reloaded it. Stop only gateway profiles restarted by the supported updater, in reverse of the updater's recorded order.
+3. Restore every changed manifest destination from `$TX/payload-preimage` in exact reverse dependency/install order. Remove only destinations whose recorded preimage was absent. Restore original modes. Verify every restored file using both `cmp` and `shasum -a 256`, then require the complete payload preimage digest.
+4. Restore the runtime checkout to the recorded preimage commit with `git reset --hard <recorded-pre-runtime-commit>`; restore the archived preimage venv by atomic directory replacement; verify runtime commit/tree, tracked-path inventory, venv archive digest, stash list, remote URL, and clean status. Do not restore `.git/worktrees` or delete update evidence/snapshots.
+5. Move the candidate schema-5 state aside into evidence, then restore the exact pre-activation state bytes/mode when the preimage existed, or restore absence when it did not. Preserve pending alerts and logs.
    The activation-step-5 preimage is schema 4; this candidate writes schema 5.
-5. Reload the unchanged plist only after all preimage checks pass, then observe a full interval. No gateway restart, config change, plist edit, task mutation, or board repair is part of this rollback.
+6. Restart only gateways recorded running before activation, in the original fixed profile order. Restore the continuity guard's prior loaded/running state only after all runtime, payload, and state preimages verify.
+7. Observe a full interval of at least 60 seconds and require exact preimage runtime/payload/process state, healthy prior-version behavior, preserved board/database state, and no transaction residue. Any mismatch leaves rollback incomplete and affected services stopped for Rook/Oliver escalation.
 
 ## Explicit non-actions
 
-Candidate construction performs no live installation, dispatch, message send, launchd operation, gateway restart, configuration change, credential access, board mutation, VPS action, website action, or publication.
+Candidate construction performs no live installation, updater invocation, dispatch, message send, launchd operation, gateway restart, configuration change, credential access, board mutation, VPS action, website action, or publication. Activation remains separately authorized operator work after independent PASS.

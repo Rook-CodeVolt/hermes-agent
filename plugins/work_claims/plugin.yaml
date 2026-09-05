@@ -1,5 +1,5 @@
 name: work-claims
-version: "1.6.0"
+version: "1.6.1"
 description: "Fail-closed cross-session work claims backed by SQLite and mirrored to Hermes Kanban."
 author: "Rook"
 provides_tools:

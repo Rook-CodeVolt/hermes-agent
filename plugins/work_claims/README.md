@@ -10,6 +10,12 @@ This profile-local Hermes plugin prevents independent sessions from mutating the
 ## Behavior
 
 - Atomic multi-target claims in `~/.hermes/work-claims.db`.
+- Every plugin connection enables and verifies SQLite foreign-key enforcement,
+  making `claim_targets`' declared `ON DELETE CASCADE` effective. Every
+  acquisition also atomically removes target rows whose parent claim is
+  missing or no longer active, so a partial release or out-of-band repair
+  cannot retain a uniqueness slot and permanently block a later legitimate
+  acquisition.
 - A visible audit card for every claim on the `work-claims` Kanban board.
 - Automatic isolated Git worktree creation when a primary checkout is claimed.
 - Fail-closed `pre_tool_call` enforcement for material mutation tools.

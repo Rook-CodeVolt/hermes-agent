@@ -130,11 +130,38 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 conn.execute(ddl)
 
 
+def _reconcile_claim_targets(conn: sqlite3.Connection) -> None:
+    """Remove target rows that no longer belong to an active claim.
+
+    ``claim_targets.target`` is the uniqueness boundary used by acquisition.
+    A connection opened outside this module may have SQLite foreign-key
+    enforcement disabled (SQLite's per-connection default), or may update a
+    claim to ``released``/``expired`` without deleting its targets first. In
+    either case the stale row must not permanently occupy that uniqueness
+    slot. One atomic statement retains every active claim and removes only
+    rows whose parent is missing or explicitly non-active.
+    """
+    conn.execute(
+        "DELETE FROM claim_targets "
+        "WHERE NOT EXISTS ("
+        "SELECT 1 FROM claims "
+        "WHERE claims.claim_id=claim_targets.claim_id AND claims.status='active'"
+        ")"
+    )
+
+
 def _connect() -> sqlite3.Connection:
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=10, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    # SQLite disables FK enforcement by default on every new connection. The
+    # schema's ON DELETE CASCADE is a safety property, so enable and verify it
+    # before any migration or data statement is allowed to proceed.
+    conn.execute("PRAGMA foreign_keys=ON")
+    if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+        conn.close()
+        raise RuntimeError("SQLite foreign-key enforcement could not be enabled")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=10000")
     _migrate(conn)
@@ -431,6 +458,7 @@ def acquire(session_id: str, summary: str, targets: Iterable[str], workspace: st
     try:
         conn.execute("BEGIN IMMEDIATE")
         _expire_stale(conn, now)
+        _reconcile_claim_targets(conn)
         existing_session = conn.execute(
             "SELECT claim_id FROM claims WHERE session_id=? AND status='active'", (session_id,)
         ).fetchone()

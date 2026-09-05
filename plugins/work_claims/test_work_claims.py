@@ -31,6 +31,61 @@ class WorkClaimsTests(unittest.TestCase):
         self.assertEqual(second["conflicts"][0]["session_id"], "s1")
 
     @patch.object(core, "_kanban_create", return_value="t_one")
+    def test_orphaned_target_with_deleted_parent_self_heals_on_shared_db_acquire(self, _create):
+        target = "external:orphaned-parent"
+        profiles = self.home / "profiles"
+        shared_db = self.home.resolve() / "work-claims.db"
+        with patch.dict(os.environ, {"HERMES_HOME": str(profiles / "alpha")}, clear=False):
+            self.assertEqual(core.db_path(), shared_db)
+            self.assertTrue(core.acquire("s1", "first", [target])["success"])
+
+        # Simulate an out-of-band repair using SQLite's default FK-off
+        # connection: remove the parent while deliberately leaving its target.
+        raw = sqlite3.connect(shared_db, isolation_level=None)
+        self.assertEqual(raw.execute("PRAGMA foreign_keys").fetchone()[0], 0)
+        raw.execute("DELETE FROM claims WHERE session_id='s1'")
+        self.assertEqual(
+            raw.execute("SELECT COUNT(*) FROM claim_targets WHERE target=?", (target,)).fetchone()[0],
+            1,
+        )
+        raw.close()
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(profiles / "beta")}, clear=False):
+            self.assertEqual(core.db_path(), shared_db)
+            second = core.acquire("s2", "second", [target])
+        self.assertTrue(second["success"], second)
+
+    @patch.object(core, "_kanban_create", return_value="t_one")
+    def test_target_with_non_active_parent_self_heals_on_acquire(self, _create):
+        target = "external:released-parent"
+        self.assertTrue(core.acquire("s1", "first", [target])["success"])
+
+        # A partial release or direct DB edit can leave the parent present but
+        # non-active. That row must not retain the target's uniqueness slot.
+        raw = sqlite3.connect(core.db_path(), isolation_level=None)
+        raw.execute(
+            "UPDATE claims SET status='released', released_at=1 WHERE session_id='s1'"
+        )
+        raw.close()
+
+        second = core.acquire("s2", "second", [target])
+        self.assertTrue(second["success"], second)
+
+    @patch.object(core, "_kanban_create", return_value="t_one")
+    def test_connect_enables_foreign_keys_and_parent_delete_cascades(self, _create):
+        target = "external:cascade-check"
+        self.assertTrue(core.acquire("s1", "first", [target])["success"])
+
+        conn = core._connect()
+        self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+        conn.execute("DELETE FROM claims WHERE session_id='s1'")
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM claim_targets WHERE target=?", (target,)).fetchone()[0],
+            0,
+        )
+        conn.close()
+
+    @patch.object(core, "_kanban_create", return_value="t_one")
     def test_profiles_share_one_authoritative_lock_database(self, _create):
         profiles = self.home / "profiles"
         with patch.dict(os.environ, {"HERMES_HOME": str(profiles / "alpha")}, clear=False):

@@ -187,6 +187,34 @@ def test_successful_install_is_complete_and_second_run_is_idempotent(tmp_path: P
         assert path.stat().st_mode & 0o777 == int(item["mode"], 8)
 
 
+def test_installer_cli_executes_the_transaction_and_emits_receipt(tmp_path: Path) -> None:
+    source = _source_repo(tmp_path)
+    build = build_release(source, _spec(source), tmp_path / "build")
+    root = tmp_path / "installed"
+    repo = Path(__file__).resolve().parents[2]
+
+    result = subprocess.run(
+        [
+            __import__("sys").executable,
+            str(repo / "scripts/control_plane_release.py"),
+            "install",
+            "--archive",
+            str(build.archive_path),
+            "--root",
+            str(root),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(result.stdout)
+    assert receipt["verdict"] == "PASS"
+    assert receipt["destinations_installed"] == len(_spec(source)["destinations"])
+    assert receipt["changed_destinations"] == len(_spec(source)["destinations"])
+
+
 def test_installed_shape_imports_every_profile_from_arbitrary_cwd_and_minimal_env(tmp_path: Path) -> None:
     repo = _source_repo(tmp_path)
     build = build_release(repo, _spec(repo), tmp_path / "build")
@@ -735,3 +763,42 @@ def test_activation_hash_tables_match_manifest_payload_bytes() -> None:
     repo = Path(__file__).resolve().parents[2]
     receipt = validate_activation_document_hashes(repo, repo / "operations/codevolt-control-plane/release/manifest.json")
     assert receipt["verdict"] == "PASS"
+
+
+def test_rc4_candidate_preserves_accepted_work_claims_1_6_1() -> None:
+    repo = Path(__file__).resolve().parents[2]
+    spec = json.loads((repo / "operations/codevolt-control-plane/release-spec.json").read_text())
+    manifest = load_manifest(repo / "operations/codevolt-control-plane/release/manifest.json")
+    accepted_hashes = {
+        "plugins/work_claims/plugin.yaml": "e6127feb837fe97621448ac8e5b68dfae585951088e6316a414c1c4c65da5fbb",
+        "plugins/work_claims/__init__.py": "80e4333a17562145e02f542edaa0ceabf83b7e3ec55e2cb18fbd4e1d127c0bc5",
+        "plugins/work_claims/core.py": "d79e4b90ebc0884b95e8b617bc1cab565bcf7c92b98c3d376aca2af30f6f587f",
+        "plugins/work_claims/README.md": "854e8f1e082dbe28556a4ff7cb7f7cf583db2c545d5812a1eb3a3f2e7bc2e729",
+        "plugins/work_claims/test_work_claims.py": "f7a395f53ffd36a10bc974ea89b57a74108aef52b87e859aeaa3cedb8b85c377",
+    }
+    for relative, expected in accepted_hashes.items():
+        assert hashlib.sha256((repo / relative).read_bytes()).hexdigest() == expected
+
+    plugin_destinations = [
+        item for item in spec["destinations"] if item["destination_class"] == "plugin"
+    ]
+    assert len(spec["destinations"]) == 78
+    assert plugin_destinations
+    assert {item["plugin_version"] for item in plugin_destinations} == {"1.6.1"}
+    assert spec["release_channel"] == "candidate/codevolt-control-plane-rc4-continuity-source"
+    assert manifest["release_id"] == spec["release_id"]
+    assert manifest["release_channel"] == spec["release_channel"]
+    manifest_plugins = [
+        item for item in manifest["destinations"] if item["destination_class"] == "plugin"
+    ]
+    assert len(manifest_plugins) == 54
+    assert {item["plugin_version"] for item in manifest_plugins} == {"1.6.1"}
+    for item in manifest_plugins:
+        source = next(
+            raw["source"]
+            for raw in plugin_destinations
+            if raw["profile"] == item["profile"]
+            and raw["relative_destination"] == item["relative_destination"]
+        )
+        if source in accepted_hashes:
+            assert item["sha256"] == accepted_hashes[source]

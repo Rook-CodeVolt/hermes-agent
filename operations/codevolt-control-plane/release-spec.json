@@ -6,7 +6,7 @@
       "logical_name": "work-claims-root-plugin.yaml",
       "mode": "0644",
       "owner_class": "root_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "root",
       "relative_destination": "plugins/work_claims/plugin.yaml",
       "source": "plugins/work_claims/plugin.yaml"
@@ -17,7 +17,7 @@
       "logical_name": "work-claims-root-__init__.py",
       "mode": "0644",
       "owner_class": "root_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "root",
       "relative_destination": "plugins/work_claims/__init__.py",
       "source": "plugins/work_claims/__init__.py"
@@ -28,7 +28,7 @@
       "logical_name": "work-claims-root-core.py",
       "mode": "0644",
       "owner_class": "root_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "root",
       "relative_destination": "plugins/work_claims/core.py",
       "source": "plugins/work_claims/core.py"
@@ -39,7 +39,7 @@
       "logical_name": "work-claims-root-README.md",
       "mode": "0644",
       "owner_class": "root_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "root",
       "relative_destination": "plugins/work_claims/README.md",
       "source": "plugins/work_claims/README.md"
@@ -50,7 +50,7 @@
       "logical_name": "work-claims-root-test_work_claims.py",
       "mode": "0644",
       "owner_class": "root_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "root",
       "relative_destination": "plugins/work_claims/test_work_claims.py",
       "source": "plugins/work_claims/test_work_claims.py"
@@ -61,7 +61,7 @@
       "logical_name": "work-claims-root-MANIFEST.json",
       "mode": "0644",
       "owner_class": "root_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "root",
       "relative_destination": "plugins/work_claims/MANIFEST.json",
       "source": "plugins/work_claims/MANIFEST.json"
@@ -72,7 +72,7 @@
       "logical_name": "work-claims-clara-plugin.yaml",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "clara",
       "relative_destination": "plugins/work_claims/plugin.yaml",
       "source": "plugins/work_claims/plugin.yaml"
@@ -83,7 +83,7 @@
       "logical_name": "work-claims-clara-__init__.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "clara",
       "relative_destination": "plugins/work_claims/__init__.py",
       "source": "plugins/work_claims/__init__.py"
@@ -94,7 +94,7 @@
       "logical_name": "work-claims-clara-core.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "clara",
       "relative_destination": "plugins/work_claims/core.py",
       "source": "plugins/work_claims/core.py"
@@ -105,7 +105,7 @@
       "logical_name": "work-claims-clara-README.md",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "clara",
       "relative_destination": "plugins/work_claims/README.md",
       "source": "plugins/work_claims/README.md"
@@ -116,7 +116,7 @@
       "logical_name": "work-claims-clara-test_work_claims.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "clara",
       "relative_destination": "plugins/work_claims/test_work_claims.py",
       "source": "plugins/work_claims/test_work_claims.py"
@@ -127,7 +127,7 @@
       "logical_name": "work-claims-clara-MANIFEST.json",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "clara",
       "relative_destination": "plugins/work_claims/MANIFEST.json",
       "source": "plugins/work_claims/MANIFEST.json"
@@ -138,7 +138,7 @@
       "logical_name": "work-claims-daniel-plugin.yaml",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "daniel",
       "relative_destination": "plugins/work_claims/plugin.yaml",
       "source": "plugins/work_claims/plugin.yaml"
@@ -149,7 +149,7 @@
       "logical_name": "work-claims-daniel-__init__.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "daniel",
       "relative_destination": "plugins/work_claims/__init__.py",
       "source": "plugins/work_claims/__init__.py"
@@ -160,7 +160,7 @@
       "logical_name": "work-claims-daniel-core.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "daniel",
       "relative_destination": "plugins/work_claims/core.py",
       "source": "plugins/work_claims/core.py"
@@ -171,7 +171,7 @@
       "logical_name": "work-claims-daniel-README.md",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "daniel",
       "relative_destination": "plugins/work_claims/README.md",
       "source": "plugins/work_claims/README.md"
@@ -182,7 +182,7 @@
       "logical_name": "work-claims-daniel-test_work_claims.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "daniel",
       "relative_destination": "plugins/work_claims/test_work_claims.py",
       "source": "plugins/work_claims/test_work_claims.py"
@@ -193,7 +193,7 @@
       "logical_name": "work-claims-daniel-MANIFEST.json",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "daniel",
       "relative_destination": "plugins/work_claims/MANIFEST.json",
       "source": "plugins/work_claims/MANIFEST.json"
@@ -204,7 +204,7 @@
       "logical_name": "work-claims-elias-plugin.yaml",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "elias",
       "relative_destination": "plugins/work_claims/plugin.yaml",
       "source": "plugins/work_claims/plugin.yaml"
@@ -215,7 +215,7 @@
       "logical_name": "work-claims-elias-__init__.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "elias",
       "relative_destination": "plugins/work_claims/__init__.py",
       "source": "plugins/work_claims/__init__.py"
@@ -226,7 +226,7 @@
       "logical_name": "work-claims-elias-core.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "elias",
       "relative_destination": "plugins/work_claims/core.py",
       "source": "plugins/work_claims/core.py"
@@ -237,7 +237,7 @@
       "logical_name": "work-claims-elias-README.md",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "elias",
       "relative_destination": "plugins/work_claims/README.md",
       "source": "plugins/work_claims/README.md"
@@ -248,7 +248,7 @@
       "logical_name": "work-claims-elias-test_work_claims.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "elias",
       "relative_destination": "plugins/work_claims/test_work_claims.py",
       "source": "plugins/work_claims/test_work_claims.py"
@@ -259,7 +259,7 @@
       "logical_name": "work-claims-elias-MANIFEST.json",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "elias",
       "relative_destination": "plugins/work_claims/MANIFEST.json",
       "source": "plugins/work_claims/MANIFEST.json"
@@ -270,7 +270,7 @@
       "logical_name": "work-claims-hannah-plugin.yaml",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "hannah",
       "relative_destination": "plugins/work_claims/plugin.yaml",
       "source": "plugins/work_claims/plugin.yaml"
@@ -281,7 +281,7 @@
       "logical_name": "work-claims-hannah-__init__.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "hannah",
       "relative_destination": "plugins/work_claims/__init__.py",
       "source": "plugins/work_claims/__init__.py"
@@ -292,7 +292,7 @@
       "logical_name": "work-claims-hannah-core.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "hannah",
       "relative_destination": "plugins/work_claims/core.py",
       "source": "plugins/work_claims/core.py"
@@ -303,7 +303,7 @@
       "logical_name": "work-claims-hannah-README.md",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "hannah",
       "relative_destination": "plugins/work_claims/README.md",
       "source": "plugins/work_claims/README.md"
@@ -314,7 +314,7 @@
       "logical_name": "work-claims-hannah-test_work_claims.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "hannah",
       "relative_destination": "plugins/work_claims/test_work_claims.py",
       "source": "plugins/work_claims/test_work_claims.py"
@@ -325,7 +325,7 @@
       "logical_name": "work-claims-hannah-MANIFEST.json",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "hannah",
       "relative_destination": "plugins/work_claims/MANIFEST.json",
       "source": "plugins/work_claims/MANIFEST.json"
@@ -336,7 +336,7 @@
       "logical_name": "work-claims-maya-plugin.yaml",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "maya",
       "relative_destination": "plugins/work_claims/plugin.yaml",
       "source": "plugins/work_claims/plugin.yaml"
@@ -347,7 +347,7 @@
       "logical_name": "work-claims-maya-__init__.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "maya",
       "relative_destination": "plugins/work_claims/__init__.py",
       "source": "plugins/work_claims/__init__.py"
@@ -358,7 +358,7 @@
       "logical_name": "work-claims-maya-core.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "maya",
       "relative_destination": "plugins/work_claims/core.py",
       "source": "plugins/work_claims/core.py"
@@ -369,7 +369,7 @@
       "logical_name": "work-claims-maya-README.md",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "maya",
       "relative_destination": "plugins/work_claims/README.md",
       "source": "plugins/work_claims/README.md"
@@ -380,7 +380,7 @@
       "logical_name": "work-claims-maya-test_work_claims.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "maya",
       "relative_destination": "plugins/work_claims/test_work_claims.py",
       "source": "plugins/work_claims/test_work_claims.py"
@@ -391,7 +391,7 @@
       "logical_name": "work-claims-maya-MANIFEST.json",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "maya",
       "relative_destination": "plugins/work_claims/MANIFEST.json",
       "source": "plugins/work_claims/MANIFEST.json"
@@ -402,7 +402,7 @@
       "logical_name": "work-claims-oliver-plugin.yaml",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "oliver",
       "relative_destination": "plugins/work_claims/plugin.yaml",
       "source": "plugins/work_claims/plugin.yaml"
@@ -413,7 +413,7 @@
       "logical_name": "work-claims-oliver-__init__.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "oliver",
       "relative_destination": "plugins/work_claims/__init__.py",
       "source": "plugins/work_claims/__init__.py"
@@ -424,7 +424,7 @@
       "logical_name": "work-claims-oliver-core.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "oliver",
       "relative_destination": "plugins/work_claims/core.py",
       "source": "plugins/work_claims/core.py"
@@ -435,7 +435,7 @@
       "logical_name": "work-claims-oliver-README.md",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "oliver",
       "relative_destination": "plugins/work_claims/README.md",
       "source": "plugins/work_claims/README.md"
@@ -446,7 +446,7 @@
       "logical_name": "work-claims-oliver-test_work_claims.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "oliver",
       "relative_destination": "plugins/work_claims/test_work_claims.py",
       "source": "plugins/work_claims/test_work_claims.py"
@@ -457,7 +457,7 @@
       "logical_name": "work-claims-oliver-MANIFEST.json",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "oliver",
       "relative_destination": "plugins/work_claims/MANIFEST.json",
       "source": "plugins/work_claims/MANIFEST.json"
@@ -468,7 +468,7 @@
       "logical_name": "work-claims-rook-plugin.yaml",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "rook",
       "relative_destination": "plugins/work_claims/plugin.yaml",
       "source": "plugins/work_claims/plugin.yaml"
@@ -479,7 +479,7 @@
       "logical_name": "work-claims-rook-__init__.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "rook",
       "relative_destination": "plugins/work_claims/__init__.py",
       "source": "plugins/work_claims/__init__.py"
@@ -490,7 +490,7 @@
       "logical_name": "work-claims-rook-core.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "rook",
       "relative_destination": "plugins/work_claims/core.py",
       "source": "plugins/work_claims/core.py"
@@ -501,7 +501,7 @@
       "logical_name": "work-claims-rook-README.md",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "rook",
       "relative_destination": "plugins/work_claims/README.md",
       "source": "plugins/work_claims/README.md"
@@ -512,7 +512,7 @@
       "logical_name": "work-claims-rook-test_work_claims.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "rook",
       "relative_destination": "plugins/work_claims/test_work_claims.py",
       "source": "plugins/work_claims/test_work_claims.py"
@@ -523,7 +523,7 @@
       "logical_name": "work-claims-rook-MANIFEST.json",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "rook",
       "relative_destination": "plugins/work_claims/MANIFEST.json",
       "source": "plugins/work_claims/MANIFEST.json"
@@ -534,7 +534,7 @@
       "logical_name": "work-claims-sophie-plugin.yaml",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "sophie",
       "relative_destination": "plugins/work_claims/plugin.yaml",
       "source": "plugins/work_claims/plugin.yaml"
@@ -545,7 +545,7 @@
       "logical_name": "work-claims-sophie-__init__.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "sophie",
       "relative_destination": "plugins/work_claims/__init__.py",
       "source": "plugins/work_claims/__init__.py"
@@ -556,7 +556,7 @@
       "logical_name": "work-claims-sophie-core.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "sophie",
       "relative_destination": "plugins/work_claims/core.py",
       "source": "plugins/work_claims/core.py"
@@ -567,7 +567,7 @@
       "logical_name": "work-claims-sophie-README.md",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "sophie",
       "relative_destination": "plugins/work_claims/README.md",
       "source": "plugins/work_claims/README.md"
@@ -578,7 +578,7 @@
       "logical_name": "work-claims-sophie-test_work_claims.py",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "sophie",
       "relative_destination": "plugins/work_claims/test_work_claims.py",
       "source": "plugins/work_claims/test_work_claims.py"
@@ -589,7 +589,7 @@
       "logical_name": "work-claims-sophie-MANIFEST.json",
       "mode": "0644",
       "owner_class": "profile_owner",
-      "plugin_version": "1.6.0",
+      "plugin_version": "1.6.1",
       "profile": "sophie",
       "relative_destination": "plugins/work_claims/MANIFEST.json",
       "source": "plugins/work_claims/MANIFEST.json"
@@ -875,8 +875,8 @@
     "rook",
     "sophie"
   ],
-  "release_channel": "candidate/control-plane-rc4-t_fc863dc9",
-  "release_id": "cv-control-plane-2026-09-05-rc4",
+  "release_channel": "candidate/codevolt-control-plane-rc4-continuity-source",
+  "release_id": "cv-control-plane-2026-09-05-rc4-remediation1",
   "restart_scope": [
     "ai.hermes.gateway",
     "ai.hermes.gateway-clara",
@@ -884,6 +884,7 @@
     "ai.hermes.gateway-elias",
     "ai.hermes.gateway-hannah",
     "ai.hermes.gateway-maya",
+    "ai.hermes.gateway-nova",
     "ai.hermes.gateway-oliver",
     "ai.hermes.gateway-rook",
     "ai.hermes.gateway-sophie",
