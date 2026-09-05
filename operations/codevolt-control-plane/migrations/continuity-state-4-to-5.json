@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "migration_id": "continuity-state-4-to-5",
+  "from_schema": 4,
+  "to_schema": 5,
+  "state_class": "synthetic-or-authorized-live-only",
+  "forward": {
+    "remove_keys": ["last_active_reconciliation"],
+    "preserve_unknown_keys": false,
+    "writer": "operations/codevolt-control-plane/continuity/codevolt_continuity_guard.py"
+  },
+  "transaction_failure": "restore exact state-file preimage and prior service state",
+  "forward_correction": "publish a new manifest-bound release; never move an accepted release identity"
+}

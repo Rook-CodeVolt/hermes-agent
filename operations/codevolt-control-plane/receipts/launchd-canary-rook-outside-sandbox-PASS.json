@@ -1,0 +1,22 @@
+{
+  "absence_proven": true,
+  "absent_print_rc": 113,
+  "bootout_rc": 0,
+  "bootstrap_attempts": [
+    {
+      "attempt": 1,
+      "rc": 0,
+      "stderr": ""
+    }
+  ],
+  "bootstrap_rc": 0,
+  "checked_at_advance_seconds": 60,
+  "elapsed_seconds": 61.28,
+  "fixture": "synthetic-three-board-complete",
+  "interval_checked_at": 1788592311,
+  "interval_seconds": 60,
+  "label": "com.codevolt.continuity-guard.canary.33829.1788592250",
+  "loaded_print_rc": 0,
+  "run_at_load": true,
+  "run_at_load_checked_at": 1788592251
+}

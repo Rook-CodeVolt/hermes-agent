@@ -1,0 +1,28 @@
+{
+  "absence_proven": true,
+  "absent_print_rc": 113,
+  "bootout_rc": null,
+  "bootstrap_attempts": [
+    {
+      "attempt": 1,
+      "post_failure_print_rc": 113,
+      "rc": 5,
+      "stderr": "Bootstrap failed: 5: Input/output error\nTry re-running the command as root for richer errors."
+    },
+    {
+      "attempt": 2,
+      "post_failure_print_rc": 113,
+      "rc": 5,
+      "stderr": "Bootstrap failed: 5: Input/output error\nTry re-running the command as root for richer errors."
+    }
+  ],
+  "bootstrap_rc": 5,
+  "bootstrap_stderr": "Bootstrap failed: 5: Input/output error\nTry re-running the command as root for richer errors.",
+  "detail": "launchd bootstrap failed",
+  "error": "RuntimeError",
+  "fixture": "synthetic-three-board-complete",
+  "interval_seconds": 60,
+  "label": "com.codevolt.continuity-guard.canary.25493.1788591246",
+  "loaded_print_rc": null,
+  "run_at_load": true
+}

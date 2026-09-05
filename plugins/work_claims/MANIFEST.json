@@ -1,0 +1,12 @@
+{
+  "plugin_version": "1.6.0",
+  "production_installer_path": "/Users/rook/.hermes/scripts/install_work_claims.py",
+  "production_installer_sha256": "dc20b4cdc08cf605d5183b2167c4da592c9ad5ad4ada3c3861826f101367f91e",
+  "files": {
+    "plugin.yaml": "cf081cd544949752a83411444f829a77b9caee438c8b672bf2ef4294cee68748",
+    "__init__.py": "80e4333a17562145e02f542edaa0ceabf83b7e3ec55e2cb18fbd4e1d127c0bc5",
+    "core.py": "35e4696ae42d7ca8098ca1b08cdff66e22f0f3deb5069c268089e319480a8b99",
+    "README.md": "ef87cc7edf2b92edd723188314c3c985428058a9b3bc32c9f6d3f63477bc66e7",
+    "test_work_claims.py": "51546214bcea9fda2b236bdcb6a3b529432a429e8fffb04b9bd64d168f22105a"
+  }
+}

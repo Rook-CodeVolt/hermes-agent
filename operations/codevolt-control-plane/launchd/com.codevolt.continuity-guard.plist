@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.codevolt.continuity-guard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/rook/.hermes/hermes-agent/venv/bin/python</string>
+    <string>/Users/rook/.hermes/scripts/codevolt_continuity_guard.py</string>
+    <string>--watchdog</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>ResidentSetSize</key>
+    <integer>134217728</integer>
+  </dict>
+  <key>HardResourceLimits</key>
+  <dict>
+    <key>ResidentSetSize</key>
+    <integer>268435456</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/rook/.hermes/logs/codevolt-continuity-guard-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/rook/.hermes/logs/codevolt-continuity-guard-error.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/rook</string>
+    <key>HERMES_HOME</key>
+    <string>/Users/rook/.hermes/profiles/rook</string>
+    <key>HERMES_PROFILE</key>
+    <string>rook</string>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/Users/rook/.local/bin</string>
+  </dict>
+</dict>
+</plist>

@@ -1,0 +1,10 @@
+{
+  "changed_destinations": 77,
+  "destinations_installed": 77,
+  "manifest_sha256": "5a5d6eccf2a169314f157d0a77e8d769b6c84caabae78460c07283e8c8df70ab",
+  "postimage_sha256": "a930f0a1b82ff69fcdf2cd2afd4b86feaaec32ca4d6924ebec71b028554f674e",
+  "preimage_sha256": "1794014693c3ad7de7e62ba13e274297ff9c71efe4f12821740f59597b631675",
+  "release_id": "cv-control-plane-2026-09-05-rc3",
+  "schema_version": 1,
+  "verdict": "PASS"
+}

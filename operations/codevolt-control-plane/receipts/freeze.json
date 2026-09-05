@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "release_id": "cv-control-plane-2026-09-05-rc3",
+  "source_commit": "92f682d108c849aa16ec3bad7925837f4b54e115",
+  "source_tree": "7f4ccbb00a5a608f07552d88d7f7621f068489bf",
+  "manifest_sha256": "5a5d6eccf2a169314f157d0a77e8d769b6c84caabae78460c07283e8c8df70ab",
+  "archive_sha256": "5b0c3e68897b7c5f22052c2a53c24a69b60594402d9f94d10b73e618349b38ed",
+  "double_build_byte_identical": true,
+  "destinations": 77,
+  "unique_payloads": 28,
+  "archive_members": 29,
+  "production_profiles": [
+    "clara",
+    "daniel",
+    "elias",
+    "hannah",
+    "maya",
+    "oliver",
+    "rook",
+    "sophie"
+  ],
+  "interacting_suite": {
+    "passed": 422,
+    "skipped": 1,
+    "subtests_passed": 21,
+    "duration_seconds": 86.38
+  },
+  "focused_release_suite": {
+    "passed": 26,
+    "duration_seconds": 17.42
+  },
+  "static_checks": {
+    "ruff": "PASS",
+    "mypy_release_tool": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "scratch_receipts": {
+    "install": "PASS",
+    "installed_shape_immutable_export": "PASS"
+  },
+  "typed_gate_contract": {
+    "jcs_positive_fixture": "PASS",
+    "recursive_g10_g20_g30_envelope_fixture": "PASS",
+    "forged_duplicate_contradictory_predecessors": "BLOCK",
+    "strict_cli": "PASS",
+    "operational_g30_status": "PENDING_INDEPENDENT_REVIEW"
+  },
+  "incident_controls": {
+    "AUTH-WRONG-BOARD": "BLOCK",
+    "SCRATCH-NO-EFFECTS": "BLOCK",
+    "SCRATCH-PIDS": "BLOCK",
+    "GATEWAY-PROFILE": "BLOCK"
+  },
+  "prior_external_proofs": {
+    "status": "accepted_non_overriding_evidence_from_rc1",
+    "launchd_canary_sha256": "3a1086a915a648776239fc618eea1597becc5864f870297486f973cb6a20d5bb",
+    "unchanged_pid_sha256": "f4408e49a9366aacb27876c201b4410c2460f59bd8abff76880f655711954384"
+  },
+  "live_activation_performed": false,
+  "live_paths_modified": false,
+  "verdict": "PASS_READY_FOR_INDEPENDENT_EXACT_BYTE_REVIEW"
+}

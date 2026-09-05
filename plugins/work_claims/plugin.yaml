@@ -1,0 +1,15 @@
+name: work-claims
+version: "1.6.0"
+description: "Fail-closed cross-session work claims backed by SQLite and mirrored to Hermes Kanban."
+author: "Rook"
+provides_tools:
+  - work_claim_acquire
+  - work_claim_status
+  - work_claim_renew
+  - work_claim_release
+provides_hooks:
+  - pre_tool_call
+  - on_session_finalize
+  - on_execution_turn_begin
+  - on_execution_turn_renew
+  - on_execution_turn_end

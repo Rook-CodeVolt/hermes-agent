@@ -1,0 +1,25 @@
+{
+  "pid_after_count": 38,
+  "pid_before_count": 38,
+  "pid_identities_unchanged": true,
+  "receipt": {
+    "command": [
+      "hermes",
+      "update",
+      "--branch",
+      "approved/test",
+      "--yes",
+      "--keep-stash"
+    ],
+    "global_effects_suppressed": true,
+    "live_pid_birth_identities_unchanged": true,
+    "live_pid_identity_count": 38,
+    "post_commit": "913b4f1fac74d0c17b147cccadf8cc5e3a5ba9e2",
+    "post_tree": "dc529d6535b6ca1af972a2ced3d7adcb5cd14ed0",
+    "pre_commit": "df9eac58d389903047ee22b1cd5bcec28ec9d3be",
+    "pre_tree": "3873512309bc8a8f36a8c8e81b7dc1c8588705e4",
+    "release_id": "cv-test-1",
+    "schema_version": 1,
+    "verdict": "PASS"
+  }
+}

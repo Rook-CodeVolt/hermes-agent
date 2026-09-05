@@ -1,0 +1,1077 @@
+{
+  "schema_version": 2,
+  "contract_id": "cv-control-plane-assurance-v2",
+  "supersedes_contract_id": "cv-control-plane-assurance-v1",
+  "superseded_contract_status": "BLOCK",
+  "status": "review-candidate",
+  "owner": "Daniel",
+  "governance_owner": "Rook",
+  "created_at": "2026-09-03T09:15:35+01:00",
+  "fail_closed": true,
+  "unknown_fields_policy": "reject",
+  "unknown_enum_policy": "reject",
+  "verdicts": ["PASS", "BLOCK"],
+  "stage_order": [
+    "source_review",
+    "scratch_proof",
+    "exact_byte_approval",
+    "live_activation",
+    "active_state_verification"
+  ],
+  "stage_rules": {
+    "non_collapsible": true,
+    "terminal_task_status_is_evidence_only": true,
+    "review_candidate_is_not_pass": true,
+    "activation_is_not_verification": true,
+    "block_on_missing_or_stale_evidence": true
+  },
+  "authority": {
+    "accountable_owner": "Tom King",
+    "work_system_manager": "Rook",
+    "release_approver": "Rook",
+    "runtime_implementer_operator": "Oliver",
+    "security_exact_byte_reviewer": "Maya",
+    "active_runtime_reviewer": "Maya",
+    "contract_owner": "Daniel",
+    "reviewer_must_differ_from_author": true,
+    "active_runtime_reviewer_must_differ_from_activator": true,
+    "protected_actions": [
+      "credentials",
+      "profile_access_widening",
+      "plugin_enablement",
+      "gateway_or_dashboard_exposure",
+      "live_activation",
+      "service_restart",
+      "launchd_mutation",
+      "board_normalization",
+      "production_publication",
+      "dns",
+      "tracking",
+      "payment_configuration",
+      "hostinger_or_vps_mutation",
+      "rollback"
+    ]
+  },
+  "scope": {
+    "managed_boards": [
+      "codevolt-managed-delivery",
+      "platform-command-centre",
+      "local-model-security-research"
+    ],
+    "hard_board_confinement": true,
+    "tenant": "codevolt-production",
+    "plugin_destinations": [
+      "root",
+      "profile:clara",
+      "profile:daniel",
+      "profile:elias",
+      "profile:hannah",
+      "profile:maya",
+      "profile:oliver",
+      "profile:rook",
+      "profile:sophie"
+    ],
+    "excluded_profiles": ["drtest-rook"],
+    "profile_wildcards_allowed": false,
+    "one_writer_per_shared_target": true
+  },
+  "release_unit": {
+    "required_components": [
+      "runtime_commit_and_tree",
+      "plugins",
+      "helper_modules",
+      "launchd_definitions",
+      "migrations",
+      "checks",
+      "fixtures",
+      "recovery_documentation"
+    ],
+    "manifest_required_fields": [
+      "schema_version",
+      "release_id",
+      "policy_version",
+      "source_commit",
+      "source_tree",
+      "release_channel",
+      "toolchain",
+      "destinations",
+      "restart_scope",
+      "migration",
+      "rollback_release_id",
+      "preimages"
+    ],
+    "destination_required_fields": [
+      "logical_name",
+      "profile",
+      "destination_class",
+      "relative_destination",
+      "sha256",
+      "byte_length",
+      "mode",
+      "owner_class",
+      "plugin_version",
+      "dependency_order"
+    ],
+    "canonical_format": "UTF-8 JSON; sorted keys; LF; one terminal newline",
+    "forbidden": [
+      "wildcard_destinations",
+      "ambient_profile_discovery_during_install",
+      "mutable_branch_identity_without_full_commit",
+      "unlisted_helpers",
+      "partial_profile_distribution",
+      "secrets",
+      "credentials",
+      "mutable_runtime_state"
+    ],
+    "core_update": {
+      "command_family": "hermes update",
+      "target": "Rook-approved protected release channel",
+      "precondition": "remote channel resolves to approved full source_commit",
+      "postcondition": "installed full commit and tree equal manifest",
+      "forbid": [
+        "ad_hoc_git_pull",
+        "manual_git_checkout",
+        "copied_runtime_source",
+        "live_editable_patch",
+        "direct_venv_mutation"
+      ]
+    },
+    "rollback": {
+      "release_model": "forward_only_corrective_release",
+      "transaction_failure_model": "automatic_exact_preimage_restore_then_reconcile",
+      "rehearsals_required": [
+        "scratch_exact_preimage_restore",
+        "scratch_forward_corrective_release"
+      ]
+    }
+  },
+  "exact_task_authority": {
+    "authoritative_fields": [
+      "board",
+      "tenant",
+      "task_id",
+      "run_id",
+      "assignee_profile",
+      "canonical_workspace",
+      "claim_or_lease_id",
+      "issued_at",
+      "expires_at",
+      "dispatch_nonce"
+    ],
+    "context_only_fields": [
+      "HERMES_KANBAN_TASK",
+      "HERMES_HOME",
+      "cwd",
+      "caller_supplied_paths",
+      "process_environment"
+    ],
+    "nonce_consume": "atomic_one_use",
+    "transactional_recheck_before_mutation": true,
+    "exact_dispatch": {"task_id_required": true, "max_spawns": 1},
+    "pid_identity_fields": [
+      "pid",
+      "process_birth_token",
+      "executable",
+      "canonical_environment",
+      "profile",
+      "task_id",
+      "run_id"
+    ],
+    "deny_after": [
+      "finalisation",
+      "reassignment",
+      "expiry",
+      "claim_loss",
+      "board_mismatch",
+      "tenant_mismatch",
+      "workspace_mismatch",
+      "run_replacement"
+    ],
+    "path_comparison": ["canonical_realpath", "casefold", "filesystem_identity"],
+    "protected_floors": [
+      "hermes_root",
+      "profiles",
+      "plugins",
+      "boards",
+      "credentials",
+      "launchd"
+    ]
+  },
+  "execution_evidence": {
+    "kanban_worker_requires": [
+      "current_task_run_binding",
+      "pid_identity",
+      "task_claim_lease",
+      "fresh_heartbeat"
+    ],
+    "freshness_seconds": 90,
+    "finalisation_revokes_before_terminal_visibility": true,
+    "standalone": {
+      "counts_as_accountable_specialist": false,
+      "required_fields": [
+        "execution_pseudonym",
+        "pid_identity",
+        "target_pseudonyms",
+        "expires_at",
+        "heartbeat_at",
+        "progress_seq"
+      ],
+      "states": ["warming", "executing", "stalled", "stale", "finalised"],
+      "warming_rule": "first complete fresh observation",
+      "executing_rule": "next fresh observation has strictly greater progress_seq",
+      "stalled_rule": "fresh PID and lease without progress advance",
+      "stale_rule": "expired lease, stale heartbeat, dead PID, or PID identity mismatch",
+      "durable_runner_required": true,
+      "open_shell_or_session_record_is_insufficient": true
+    }
+  },
+  "continuity": {
+    "classes": [
+      "executing_specialist",
+      "ready",
+      "dependency_gated",
+      "protected_stop",
+      "malformed",
+      "historical"
+    ],
+    "classes_are_disjoint": true,
+    "totals_must_reconcile": true,
+    "verdict_precedes_status": true,
+    "blocking_verdicts": ["BLOCK", "REJECT", "PIVOT_REQUIRED"],
+    "review_requires_current_reviewer_process": true,
+    "runway": {
+      "target_min": 2,
+      "target_max": 3,
+      "metric": "unique_accountable_specialists",
+      "worker_process_count_reported_separately": true,
+      "one_lane_exception": "all other records reconciled as dependency_gated, protected_stop, malformed, or colliding"
+    },
+    "critical_path": {
+      "declaration": "explicit machine field",
+      "title_inference_forbidden": true,
+      "allowed_successor_statuses": ["todo", "ready", "running", "review"],
+      "prohibited_successor_statuses": ["blocked", "done", "archived"],
+      "missing_or_malformed_child_satisfies": false
+    },
+    "guard_authority": {
+      "may": [
+        "observe",
+        "classify",
+        "dispatch_at_most_one_already_ready_exact_task",
+        "alert_rook"
+      ],
+      "may_not": [
+        "create_tasks",
+        "repair_dependencies",
+        "invent_owners",
+        "override_verdicts",
+        "normalize_boards",
+        "wake_reasoning_governor",
+        "run_second_manager"
+      ]
+    }
+  },
+  "scheduling": {
+    "website_lane_minimum_while_unresolved_and_safe_work_exists": 1,
+    "preventive_implementation_prerequisites": [
+      "website_live_gate_literal_PASS",
+      "website_exact_live_readback",
+      "website_public_checks_PASS",
+      "website_rollback_evidence_present",
+      "continuity_exact_byte_review_literal_PASS",
+      "continuity_active_runtime_review_literal_PASS"
+    ],
+    "critical_authority_or_safety_incident_can_pause_other_work": true,
+    "exception_recorder": "Rook",
+    "commercial_urgency_can_weaken_controls": false
+  },
+  "slos": [
+    {
+      "id": "SLO-AUTH",
+      "indicator": "protected mutations with exact current authority binding",
+      "objective": "100%",
+      "error_budget": "0 events",
+      "breach_action": "block activation and alert Rook"
+    },
+    {
+      "id": "SLO-RELEASE",
+      "indicator": "installed files matching one approved manifest at every declared destination",
+      "objective": "100%",
+      "error_budget": "0 files",
+      "breach_action": "restore transaction preimages and block"
+    },
+    {
+      "id": "SLO-ORDER",
+      "indicator": "activations preceded by independent exact-byte PASS",
+      "objective": "100%",
+      "error_budget": "0 activations",
+      "breach_action": "contain, reject activation process, require new release"
+    },
+    {
+      "id": "SLO-WATCHDOG",
+      "indicator": "scheduled observations persisted with reconciled result within 10 seconds",
+      "objective": ">=99.9% monthly",
+      "error_budget": "0.1% count-based monthly",
+      "breach_action": "critical alert after two misses or 120-second evidence gap"
+    },
+    {
+      "id": "SLO-DETECTION",
+      "indicator": "critical control-plane faults detected and alertable",
+      "objective": "<=120 seconds",
+      "error_budget": "0 intervals beyond 120 seconds",
+      "breach_action": "block discretionary control-plane releases"
+    },
+    {
+      "id": "SLO-FRESHNESS",
+      "indicator": "records presented as executing with complete mutually consistent evidence <=90 seconds old",
+      "objective": ">=99% monthly",
+      "error_budget": "1% count-based monthly; stale records are excluded immediately",
+      "breach_action": "classify malformed and create bounded correction"
+    },
+    {
+      "id": "SLO-RECOVERY",
+      "indicator": "failed activations restored to exact preimages and declared prior service state",
+      "objective": "<=300 seconds",
+      "error_budget": "0 unreconciled partial activations",
+      "breach_action": "critical incident"
+    },
+    {
+      "id": "SLO-ALERT",
+      "indicator": "external alerts conform to allowlist",
+      "objective": "100%",
+      "error_budget": "0 disclosures",
+      "breach_action": "disable external projection and alert Rook locally"
+    }
+  ],
+  "alert_schema": {
+    "allowed_fields": [
+      "schema_version",
+      "severity",
+      "reason_code",
+      "board",
+      "task_id",
+      "profile",
+      "release_id",
+      "counts",
+      "claim_pseudonym",
+      "observed_at_utc"
+    ],
+    "forbidden_content": [
+      "secret",
+      "credential",
+      "prompt",
+      "message_content",
+      "session_id",
+      "dispatch_nonce",
+      "raw_claim_id",
+      "pid",
+      "absolute_path",
+      "home_path",
+      "workspace_path",
+      "raw_target",
+      "environment_value",
+      "stack_trace",
+      "raw_exception",
+      "customer_data",
+      "attachment_content"
+    ],
+    "projection": "allowlist_only",
+    "claim_pseudonym": "keyed_local_digest"
+  },
+  "receipt_schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+  "receipt_schema_rules": {
+    "all_objects_additional_properties": false,
+    "duplicate_json_keys": "reject_before_validation",
+    "unknown_evidence_type": "reject",
+    "unknown_reason_code": "reject",
+    "unknown_gate_reason_combination": "reject",
+    "timestamps": "RFC3339 UTC with terminal Z",
+    "arrays": "preserve declared order except arrays with x-sort-key; reject duplicates",
+    "prerequisites": "each prerequisite hash binds a closed {input,output,prerequisites} envelope; recursively validate the complete chain"
+  },
+  "evidence_type_registry": {
+    "registry_version": 1,
+    "unknown_type_policy": "reject",
+    "types": {
+      "artifact_digest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "evidence_id", "subject", "sha256", "byte_length", "media_type", "produced_at_utc"],
+        "properties": {
+          "type": {"const": "artifact_digest"},
+          "evidence_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "subject": {"type": "string", "minLength": 1, "maxLength": 256},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "byte_length": {"type": "integer", "minimum": 0},
+          "media_type": {"type": "string", "pattern": "^[a-z0-9.+-]+/[a-z0-9.+-]+$"},
+          "produced_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"}
+        }
+      },
+      "test_receipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "evidence_id", "suite", "verdict", "passed", "failed", "receipt_sha256", "produced_at_utc"],
+        "properties": {
+          "type": {"const": "test_receipt"},
+          "evidence_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "suite": {"type": "string", "minLength": 1, "maxLength": 256},
+          "verdict": {"enum": ["PASS", "BLOCK"]},
+          "passed": {"type": "integer", "minimum": 0},
+          "failed": {"type": "integer", "minimum": 0},
+          "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "produced_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"}
+        }
+      },
+      "process_identity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "evidence_id", "profile", "pid", "birth_token", "executable_sha256", "release_id", "observed_at_utc"],
+        "properties": {
+          "type": {"const": "process_identity"},
+          "evidence_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "profile": {"enum": ["clara", "daniel", "elias", "hannah", "maya", "oliver", "rook", "sophie"]},
+          "pid": {"type": "integer", "minimum": 1},
+          "birth_token": {"type": "string", "minLength": 1, "maxLength": 256},
+          "executable_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "release_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "observed_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"}
+        }
+      },
+      "control_observation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "evidence_id", "control_id", "sequence", "verdict", "receipt_sha256", "observed_at_utc"],
+        "properties": {
+          "type": {"const": "control_observation"},
+          "evidence_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "control_id": {"type": "string", "pattern": "^[A-Z0-9][A-Z0-9_-]{0,127}$"},
+          "sequence": {"type": "integer", "minimum": 0},
+          "verdict": {"enum": ["PASS", "BLOCK"]},
+          "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "observed_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"}
+        }
+      },
+      "authorization": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "evidence_id", "approver", "action", "release_id", "authorization_sha256", "authorized_at_utc", "expires_at_utc"],
+        "properties": {
+          "type": {"const": "authorization"},
+          "evidence_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "approver": {"const": "rook"},
+          "action": {"enum": ["website_priority_pass", "continuity_active_pass", "live_activation", "rollback"]},
+          "release_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "authorization_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "authorized_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"},
+          "expires_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"}
+        }
+      },
+      "transaction_receipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "evidence_id", "release_id", "preimage_sha256", "postimage_sha256", "restart_scope_sha256", "verdict", "recovery_seconds", "completed_at_utc"],
+        "properties": {
+          "type": {"const": "transaction_receipt"},
+          "evidence_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "release_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "preimage_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "postimage_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "restart_scope_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "verdict": {"enum": ["PASS", "BLOCK"]},
+          "recovery_seconds": {"type": "integer", "minimum": 0},
+          "completed_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"}
+        }
+      }
+    }
+  },
+  "gate_input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schema_version", "gate_id", "release_id", "stage", "source_commit", "source_tree", "policy_version", "manifest_sha256", "actor", "actor_role", "prerequisite_receipts", "evidence", "observed_at_utc"],
+    "properties": {
+      "schema_version": {"const": 1},
+      "gate_id": {"enum": ["G10_SOURCE_REVIEW", "G20_SCRATCH_PROOF", "G30_EXACT_BYTE_APPROVAL", "G40_WEBSITE_PRIORITY", "G41_CONTINUITY_ACTIVE", "G50_LIVE_ACTIVATION", "G60_ACTIVE_STATE"]},
+      "release_id": {"type": "string", "minLength": 1, "maxLength": 128},
+      "stage": {"enum": ["source_review", "scratch_proof", "exact_byte_approval", "live_activation", "active_state_verification"]},
+      "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+      "source_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+      "policy_version": {"const": "cv-control-plane-assurance-v2"},
+      "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "actor": {"enum": ["clara", "daniel", "elias", "hannah", "maya", "oliver", "rook", "sophie"]},
+      "actor_role": {"enum": ["author", "operator", "exact_byte_reviewer", "active_runtime_reviewer", "approver"]},
+      "prerequisite_receipts": {"type": "array", "uniqueItems": true, "x-sort-key": "lexicographic", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+      "evidence": {"type": "array", "minItems": 1, "uniqueItems": true, "x-sort-key": ["type", "evidence_id"], "items": {"oneOf": [
+        {"$ref": "#/evidence_type_registry/types/artifact_digest"},
+        {"$ref": "#/evidence_type_registry/types/test_receipt"},
+        {"$ref": "#/evidence_type_registry/types/process_identity"},
+        {"$ref": "#/evidence_type_registry/types/control_observation"},
+        {"$ref": "#/evidence_type_registry/types/authorization"},
+        {"$ref": "#/evidence_type_registry/types/transaction_receipt"}
+      ]}},
+      "observed_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"}
+    }
+  },
+  "gate_output_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schema_version", "gate_id", "release_id", "stage", "verdict", "reason_codes", "findings", "produced_evidence", "evidence_sha256", "actor", "observed_at_utc"],
+    "properties": {
+      "schema_version": {"const": 1},
+      "gate_id": {"enum": ["G10_SOURCE_REVIEW", "G20_SCRATCH_PROOF", "G30_EXACT_BYTE_APPROVAL", "G40_WEBSITE_PRIORITY", "G41_CONTINUITY_ACTIVE", "G50_LIVE_ACTIVATION", "G60_ACTIVE_STATE"]},
+      "release_id": {"type": "string", "minLength": 1, "maxLength": 128, "x-equals-input": "release_id"},
+      "stage": {"enum": ["source_review", "scratch_proof", "exact_byte_approval", "live_activation", "active_state_verification"], "x-equals-input": "stage"},
+      "verdict": {"enum": ["PASS", "BLOCK"]},
+      "reason_codes": {"type": "array", "uniqueItems": true, "x-sort-key": "lexicographic", "items": {"type": "string", "x-enum-source": "#/reason_code_registry/gate_output_codes"}, "x-empty-iff-verdict": "PASS"},
+      "findings": {"type": "array", "x-empty-iff-verdict": "PASS", "items": {"type": "object", "additionalProperties": false, "required": ["reason_code", "summary", "evidence_ids"], "properties": {
+        "reason_code": {"type": "string", "x-member-of-output": "reason_codes"},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "evidence_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "x-sort-key": "lexicographic", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"}}
+      }}},
+      "produced_evidence": {"type": "array", "uniqueItems": true, "x-sort-key": ["type", "evidence_id"], "items": {"oneOf": [
+        {"$ref": "#/evidence_type_registry/types/artifact_digest"},
+        {"$ref": "#/evidence_type_registry/types/test_receipt"},
+        {"$ref": "#/evidence_type_registry/types/process_identity"},
+        {"$ref": "#/evidence_type_registry/types/control_observation"},
+        {"$ref": "#/evidence_type_registry/types/authorization"},
+        {"$ref": "#/evidence_type_registry/types/transaction_receipt"}
+      ]}},
+      "evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "x-computed-by": "#/receipt_hash_contract"},
+      "actor": {"type": "string", "x-equals-input": "actor"},
+      "observed_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"}
+    },
+    "allOf": [
+      {"if": {"properties": {"verdict": {"const": "PASS"}}}, "then": {"properties": {"reason_codes": {"maxItems": 0}, "findings": {"maxItems": 0}}}},
+      {"if": {"properties": {"verdict": {"const": "BLOCK"}}}, "then": {"properties": {"reason_codes": {"minItems": 1}, "findings": {"minItems": 1}}}}
+    ]
+  },
+  "reason_code_registry": {
+    "registry_version": 1,
+    "unknown_code_policy": "reject",
+    "gate_output_codes": [
+      "ACTIVATION_TRANSACTION_FAILED",
+      "ACTIVE_STATE_FAILED",
+      "CONTINUITY_NOT_PASS",
+      "EVIDENCE_CONTRADICTORY",
+      "EVIDENCE_MISSING",
+      "EVIDENCE_STALE",
+      "EXACT_BYTE_MISMATCH",
+      "PREREQUISITE_NOT_PASS",
+      "REVIEWER_CONFLICT",
+      "ROLE_MISMATCH",
+      "SCHEMA_INVALID",
+      "SCRATCH_PROOF_FAILED",
+      "SOURCE_REVIEW_FAILED",
+      "WEBSITE_PRIORITY_NOT_PASS"
+    ],
+    "test_vector_outcome_codes": [
+      "ACTIVATED_BEFORE_REVIEW",
+      "ALERT_ALLOWLIST_ONLY",
+      "ALERT_DISCLOSURE",
+      "AUTHORITY_ANCHOR_OR_FLOOR_ESCAPE",
+      "AUTH_CONTEXT_NOT_AUTHORITY",
+      "BOARD_MISMATCH",
+      "DASHBOARD_NON_AUTHORITATIVE_CONTRADICTION",
+      "DISPATCH_REPLAY",
+      "EXACT_PREIMAGE_RESTORED",
+      "EXACT_TASK_MISMATCH",
+      "EXACT_TASK_OR_DISTRIBUTION_MISMATCH",
+      "FILESYSTEM_IDENTITY_ESCAPE",
+      "FORWARD_CORRECTION_OK",
+      "GATEWAY_RUNTIME_MISMATCH",
+      "HISTORICAL_CHILD_SATISFIES_SUCCESSOR",
+      "INSTALLED_SHAPE_IMPORT_FAILED",
+      "INSTALLED_SHAPE_OK",
+      "LABEL_ABSENT",
+      "LAUNCHD_CANARY_INCOMPLETE",
+      "LAUNCHD_CANARY_OK",
+      "LEASE_STALE",
+      "LIVE_PROCESS_TOUCHED",
+      "MANIFEST_DESTINATION_MISSING",
+      "ONE_LANE_JUSTIFIED",
+      "PARENT_NOT_PASS",
+      "PID_DEAD",
+      "PID_IDENTITY_MISMATCH",
+      "PLUGIN_SELF_OVERWRITE",
+      "PREFLIGHT_SKILL_MISSING",
+      "RELEASE_UNIT_PARTIAL",
+      "ROLLBACK_DOCUMENTATION_STALE",
+      "RUNWAY_NOT_SPECIALIST_UNIQUE",
+      "RUNWAY_UNDER_MINIMUM",
+      "RUN_NOT_CURRENT",
+      "SCRATCH_GLOBAL_EFFECT",
+      "STALE_MIGRATION_STATE",
+      "STALE_REVIEW",
+      "STANDALONE_EVIDENCE_INCOMPLETE",
+      "STANDALONE_EXECUTING",
+      "STANDALONE_STALLED",
+      "STANDALONE_WARMING",
+      "SUCCESSOR_MISSING",
+      "SUCCESSOR_OUTPUT_MISSING",
+      "SUCCESSOR_STAGED",
+      "TARGET_COLLISION",
+      "WEBSITE_PRIORITY_GATE"
+    ]
+  },
+  "gate_reason_code_map": {
+    "G10_SOURCE_REVIEW": ["EVIDENCE_CONTRADICTORY", "EVIDENCE_MISSING", "EVIDENCE_STALE", "REVIEWER_CONFLICT", "ROLE_MISMATCH", "SCHEMA_INVALID", "SOURCE_REVIEW_FAILED"],
+    "G20_SCRATCH_PROOF": ["EVIDENCE_CONTRADICTORY", "EVIDENCE_MISSING", "EVIDENCE_STALE", "PREREQUISITE_NOT_PASS", "ROLE_MISMATCH", "SCHEMA_INVALID", "SCRATCH_PROOF_FAILED"],
+    "G30_EXACT_BYTE_APPROVAL": ["EVIDENCE_CONTRADICTORY", "EVIDENCE_MISSING", "EVIDENCE_STALE", "EXACT_BYTE_MISMATCH", "PREREQUISITE_NOT_PASS", "REVIEWER_CONFLICT", "ROLE_MISMATCH", "SCHEMA_INVALID"],
+    "G40_WEBSITE_PRIORITY": ["EVIDENCE_CONTRADICTORY", "EVIDENCE_MISSING", "EVIDENCE_STALE", "ROLE_MISMATCH", "SCHEMA_INVALID", "WEBSITE_PRIORITY_NOT_PASS"],
+    "G41_CONTINUITY_ACTIVE": ["CONTINUITY_NOT_PASS", "EVIDENCE_CONTRADICTORY", "EVIDENCE_MISSING", "EVIDENCE_STALE", "ROLE_MISMATCH", "SCHEMA_INVALID"],
+    "G50_LIVE_ACTIVATION": ["ACTIVATION_TRANSACTION_FAILED", "EVIDENCE_CONTRADICTORY", "EVIDENCE_MISSING", "EVIDENCE_STALE", "PREREQUISITE_NOT_PASS", "ROLE_MISMATCH", "SCHEMA_INVALID"],
+    "G60_ACTIVE_STATE": ["ACTIVE_STATE_FAILED", "EVIDENCE_CONTRADICTORY", "EVIDENCE_MISSING", "EVIDENCE_STALE", "PREREQUISITE_NOT_PASS", "REVIEWER_CONFLICT", "ROLE_MISMATCH", "SCHEMA_INVALID"]
+  },
+  "gate_failure_reason_map": {
+    "evaluation_rule": "evaluate every applicable condition; emit every mapped code once in lexicographic order; no implementation-selected fallback code",
+    "common_conditions": {
+      "input_or_output_schema_invalid": "SCHEMA_INVALID",
+      "required_evidence_absent": "EVIDENCE_MISSING",
+      "evidence_outside_the_gate_or_source_validity_window": "EVIDENCE_STALE",
+      "two_validated_evidence_items_assert_incompatible_values_for_the_same_subject": "EVIDENCE_CONTRADICTORY",
+      "actor_role_does_not_equal_gates.owner_role": "ROLE_MISMATCH",
+      "any_declared_prerequisite_receipt_is_absent_or_not_literal_PASS": "PREREQUISITE_NOT_PASS",
+      "reviewer_equals_author_or_activator_where_separation_is_required": "REVIEWER_CONFLICT"
+    },
+    "gate_conditions": {
+      "G10_SOURCE_REVIEW": {"any_pass_requires_condition_false": "SOURCE_REVIEW_FAILED"},
+      "G20_SCRATCH_PROOF": {"any_pass_requires_condition_false": "SCRATCH_PROOF_FAILED"},
+      "G30_EXACT_BYTE_APPROVAL": {"any_digest_length_mode_destination_commit_tree_or_manifest_mismatch": "EXACT_BYTE_MISMATCH"},
+      "G40_WEBSITE_PRIORITY": {"any_pass_requires_condition_false": "WEBSITE_PRIORITY_NOT_PASS"},
+      "G41_CONTINUITY_ACTIVE": {"any_pass_requires_condition_false": "CONTINUITY_NOT_PASS"},
+      "G50_LIVE_ACTIVATION": {"any_pass_requires_condition_false_or_transaction_incomplete": "ACTIVATION_TRANSACTION_FAILED"},
+      "G60_ACTIVE_STATE": {"any_pass_requires_condition_false": "ACTIVE_STATE_FAILED"}
+    }
+  },
+  "gate_evidence_type_map": {
+    "G10_SOURCE_REVIEW": {"input_required_types": ["artifact_digest", "test_receipt"], "produced_allowed_types": ["artifact_digest", "control_observation", "test_receipt"]},
+    "G20_SCRATCH_PROOF": {"input_required_types": ["artifact_digest", "test_receipt"], "produced_allowed_types": ["artifact_digest", "control_observation", "process_identity", "test_receipt", "transaction_receipt"]},
+    "G30_EXACT_BYTE_APPROVAL": {"input_required_types": ["artifact_digest", "test_receipt"], "produced_allowed_types": ["artifact_digest", "control_observation", "test_receipt"]},
+    "G40_WEBSITE_PRIORITY": {"input_required_types": ["artifact_digest", "authorization", "control_observation"], "produced_allowed_types": ["artifact_digest", "control_observation"]},
+    "G41_CONTINUITY_ACTIVE": {"input_required_types": ["artifact_digest", "authorization", "control_observation"], "produced_allowed_types": ["artifact_digest", "control_observation"]},
+    "G50_LIVE_ACTIVATION": {"input_required_types": ["artifact_digest", "authorization", "transaction_receipt"], "produced_allowed_types": ["artifact_digest", "process_identity", "transaction_receipt"]},
+    "G60_ACTIVE_STATE": {"input_required_types": ["artifact_digest", "process_identity", "test_receipt"], "produced_allowed_types": ["artifact_digest", "control_observation", "process_identity", "test_receipt"]}
+  },
+  "receipt_hash_contract": {
+    "contract_version": 2,
+    "algorithm": "SHA-256",
+    "digest_encoding": "64 lowercase hexadecimal characters",
+    "canonicalization": "RFC 8785 JSON Canonicalization Scheme",
+    "unicode_rule": "preserve parsed Unicode scalar values; do not normalize",
+    "duplicate_json_keys": "reject_before_canonicalization",
+    "input_scope": "the complete validated gate input object, including empty arrays",
+    "produced_evidence_envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "evidence"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "evidence": {"type": "array", "uniqueItems": true, "x-sort-key": ["type", "evidence_id"], "items": {"oneOf": [
+          {"$ref": "#/evidence_type_registry/types/artifact_digest"},
+          {"$ref": "#/evidence_type_registry/types/test_receipt"},
+          {"$ref": "#/evidence_type_registry/types/process_identity"},
+          {"$ref": "#/evidence_type_registry/types/control_observation"},
+          {"$ref": "#/evidence_type_registry/types/authorization"},
+          {"$ref": "#/evidence_type_registry/types/transaction_receipt"}
+        ]}}
+      }
+    },
+    "evidence_order": "sort ascending by Unicode scalar value of type, then evidence_id; reject duplicate (type, evidence_id)",
+    "domain_prefix_ascii_escaped": "CV-GATE-RECEIPT\\0v2\\0",
+    "domain_prefix_hex": "43562d474154452d5245434549505400763200",
+    "framing": "domain_prefix bytes || uint64be(input_byte_length) || canonical_input_bytes || uint64be(produced_envelope_byte_length) || canonical_produced_envelope_bytes",
+    "integer_framing": "unsigned 64-bit big-endian; reject lengths above 18446744073709551615",
+    "positive_fixture": {
+      "gate_input": {
+        "schema_version": 1,
+        "gate_id": "G10_SOURCE_REVIEW",
+        "release_id": "cv-test-release",
+        "stage": "source_review",
+        "source_commit": "2222222222222222222222222222222222222222",
+        "source_tree": "3333333333333333333333333333333333333333",
+        "policy_version": "cv-control-plane-assurance-v2",
+        "manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "actor": "maya",
+        "actor_role": "exact_byte_reviewer",
+        "prerequisite_receipts": [],
+        "evidence": [
+          {"type": "artifact_digest", "evidence_id": "artifact-1", "subject": "release-manifest", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "byte_length": 3, "media_type": "application/octet-stream", "produced_at_utc": "2026-09-03T08:15:35Z"}
+        ],
+        "observed_at_utc": "2026-09-03T08:15:35Z"
+      },
+      "produced_evidence_envelope": {
+        "schema_version": 1,
+        "evidence": [
+          {"type": "artifact_digest", "evidence_id": "review-1", "subject": "source-review-receipt", "sha256": "4444444444444444444444444444444444444444444444444444444444444444", "byte_length": 4, "media_type": "application/json", "produced_at_utc": "2026-09-03T08:16:35Z"}
+        ]
+      },
+      "canonical_input_byte_length": 742,
+      "canonical_produced_envelope_byte_length": 284,
+      "expected_evidence_sha256": "44ba1ea86a73fbe917a9d60fd744ec658e8f349cd3becfd9139c805f23ccb955"
+    },
+    "prohibited_fixtures": [
+      {"id": "HASH-RAW-CONCAT", "mutation": "canonical_input_bytes || canonical_produced_envelope_bytes without prefix or lengths", "expected": "BLOCK"},
+      {"id": "HASH-DELIMITER", "mutation": "delimiter-only framing", "expected": "BLOCK"},
+      {"id": "HASH-UNSORTED-EVIDENCE", "mutation": "evidence array not sorted by (type, evidence_id)", "expected": "BLOCK"},
+      {"id": "HASH-DUPLICATE-EVIDENCE-ID", "mutation": "duplicate (type, evidence_id)", "expected": "BLOCK"},
+      {"id": "HASH-DUPLICATE-JSON-KEY", "mutation": "duplicate object key before parsing", "expected": "BLOCK"},
+      {"id": "HASH-OMITTED-EMPTY-ARRAY", "mutation": "omit a required empty array", "expected": "BLOCK"},
+      {"id": "HASH-NON-JCS", "mutation": "platform-default JSON encoding, whitespace, key order, or number rendering", "expected": "BLOCK"},
+      {"id": "HASH-RENDERED-TEXT", "mutation": "hash rendered or log text instead of validated objects", "expected": "BLOCK"},
+      {"id": "PREREQUISITE-FORGED-PARTIAL", "mutation": "replace a prerequisite envelope with a partial output-shaped dictionary and recompute its public hash", "expected": "BLOCK"},
+      {"id": "PREREQUISITE-DUPLICATE-GATE", "mutation": "supply two distinct envelopes claiming the same prerequisite gate and recompute all public hashes", "expected": "BLOCK"},
+      {"id": "PREREQUISITE-CONTRADICTORY-EVIDENCE", "mutation": "supply a literal PASS prerequisite whose validated test evidence is BLOCK or has failures", "expected": "BLOCK"},
+      {"id": "SCHEMA-CALENDAR-INVALID-RFC3339", "mutation": "supply a shape-valid but calendar-invalid UTC timestamp", "expected": "BLOCK"},
+      {"id": "SCHEMA-FINDING-REASON-NOT-IN-OUTPUT", "mutation": "supply a finding reason absent from output reason_codes", "expected": "BLOCK"},
+      {"id": "SCHEMA-NESTED-UNSORTED", "mutation": "supply nested evidence_ids outside x-sort-key order", "expected": "BLOCK"}
+    ]
+  },
+  "gates": [
+    {
+      "id": "G10_SOURCE_REVIEW",
+      "stage": "source_review",
+      "owner_role": "exact_byte_reviewer",
+      "prerequisites": [],
+      "pass_requires": [
+        "closed manifest schema",
+        "source commit and tree frozen",
+        "all incidents have named RED vectors",
+        "no secrets or protected authority",
+        "docs and rollback are internally consistent"
+      ]
+    },
+    {
+      "id": "G20_SCRATCH_PROOF",
+      "stage": "scratch_proof",
+      "owner_role": "operator",
+      "prerequisites": ["G10_SOURCE_REVIEW:PASS"],
+      "pass_requires": [
+        "final installed shape from arbitrary cwd",
+        "minimal launchd environment",
+        "every declared profile destination",
+        "global effects suppressed",
+        "live PID birth identities unchanged",
+        "isolated RunAtLoad and interval canary",
+        "exact-preimage and forward-release rehearsals"
+      ]
+    },
+    {
+      "id": "G30_EXACT_BYTE_APPROVAL",
+      "stage": "exact_byte_approval",
+      "owner_role": "exact_byte_reviewer",
+      "prerequisites": ["G20_SCRATCH_PROOF:PASS"],
+      "pass_requires": [
+        "reviewer differs from author",
+        "commit/tree/manifest and all bytes match",
+        "all test vectors rerun GREEN",
+        "rejected artifacts remain BLOCK",
+        "zero findings"
+      ]
+    },
+    {
+      "id": "G40_WEBSITE_PRIORITY",
+      "stage": "exact_byte_approval",
+      "owner_role": "approver",
+      "prerequisites": [],
+      "pass_requires": [
+        "website gate literal PASS",
+        "exact live release readback",
+        "public route, health, and security checks PASS",
+        "rollback evidence"
+      ]
+    },
+    {
+      "id": "G41_CONTINUITY_ACTIVE",
+      "stage": "exact_byte_approval",
+      "owner_role": "approver",
+      "prerequisites": [],
+      "pass_requires": [
+        "continuity exact-byte literal PASS",
+        "continuity active-state literal PASS",
+        "zero unresolved findings"
+      ]
+    },
+    {
+      "id": "G50_LIVE_ACTIVATION",
+      "stage": "live_activation",
+      "owner_role": "operator",
+      "prerequisites": [
+        "G30_EXACT_BYTE_APPROVAL:PASS",
+        "G40_WEBSITE_PRIORITY:PASS",
+        "G41_CONTINUITY_ACTIVE:PASS",
+        "Rook exact release authorization"
+      ],
+      "pass_requires": [
+        "supported updater used for runtime",
+        "transactional plugin distribution",
+        "only manifest destinations changed",
+        "only restart_scope restarted",
+        "post-install bytes match",
+        "transaction receipt complete"
+      ]
+    },
+    {
+      "id": "G60_ACTIVE_STATE",
+      "stage": "active_state_verification",
+      "owner_role": "active_runtime_reviewer",
+      "prerequisites": ["G50_LIVE_ACTIVATION:PASS"],
+      "pass_requires": [
+        "reviewer differs from activator",
+        "runtime imports match manifest",
+        "PID birth identities current",
+        "two watchdog cycles advance",
+        "hooks converge on same checker",
+        "profile gateways verified in profile scope",
+        "dashboard read-through is consistent and non-authoritative",
+        "board/workspace confinement holds",
+        "zero findings"
+      ]
+    }
+  ],
+  "test_vectors": [
+    {"id": "CV-A01", "fixture": "environment_task_only", "expected": "BLOCK", "reason": "AUTH_CONTEXT_NOT_AUTHORITY"},
+    {"id": "CV-A01-R1", "fixture": "mirror_task_and_missing_profile_copies", "expected": "BLOCK", "reason": "EXACT_TASK_OR_DISTRIBUTION_MISMATCH"},
+    {"id": "CV-A01-R2", "fixture": "caller_home_relocation_and_unprotected_floor", "expected": "BLOCK", "reason": "AUTHORITY_ANCHOR_OR_FLOOR_ESCAPE"},
+    {"id": "CV-A01-R3", "fixture": "plugin_workspace_self_overwrite", "expected": "BLOCK", "reason": "PLUGIN_SELF_OVERWRITE"},
+    {"id": "CV-A01-R4", "fixture": "case_variant_apfs_protected_path", "expected": "BLOCK", "reason": "FILESYSTEM_IDENTITY_ESCAPE"},
+    {"id": "AUTH-REPLAY", "fixture": "consumed_dispatch_nonce", "expected": "BLOCK", "reason": "DISPATCH_REPLAY"},
+    {"id": "AUTH-WRONG-TASK", "fixture": "valid_run_wrong_task", "expected": "BLOCK", "reason": "EXACT_TASK_MISMATCH"},
+    {"id": "AUTH-WRONG-BOARD", "fixture": "valid_task_wrong_board", "expected": "BLOCK", "reason": "BOARD_MISMATCH"},
+    {"id": "AUTH-PID-REUSE", "fixture": "same_pid_new_birth_token", "expected": "BLOCK", "reason": "PID_IDENTITY_MISMATCH"},
+    {"id": "AUTH-FINALISED", "fixture": "stale_worker_mutates_after_finalisation", "expected": "BLOCK", "reason": "RUN_NOT_CURRENT"},
+    {"id": "LEASE-STALE", "fixture": "fresh_pid_stale_lease", "expected": "BLOCK", "reason": "LEASE_STALE"},
+    {"id": "HEARTBEAT-DEAD-PID", "fixture": "fresh_heartbeat_dead_pid", "expected": "BLOCK", "reason": "PID_DEAD"},
+    {"id": "DETACHED-WARMING", "fixture": "first_complete_standalone_observation", "expected": "PASS", "reason": "STANDALONE_WARMING"},
+    {"id": "DETACHED-ADVANCE", "fixture": "second_fresh_standalone_progress_advance", "expected": "PASS", "reason": "STANDALONE_EXECUTING"},
+    {"id": "DETACHED-STALLED", "fixture": "fresh_standalone_without_progress", "expected": "BLOCK", "reason": "STANDALONE_STALLED"},
+    {"id": "DIST-MISSING-PROFILE", "fixture": "one_declared_profile_plugin_absent", "expected": "BLOCK", "reason": "MANIFEST_DESTINATION_MISSING"},
+    {"id": "DIST-MISSING-HELPER", "fixture": "launchd_import_helper_absent", "expected": "BLOCK", "reason": "INSTALLED_SHAPE_IMPORT_FAILED"},
+    {"id": "UPDATER-GLOBALITY", "fixture": "runtime_updated_but_profile_copy_drifted", "expected": "BLOCK", "reason": "RELEASE_UNIT_PARTIAL"},
+    {"id": "SCRATCH-CWD", "fixture": "arbitrary_cwd_minimal_environment", "expected": "PASS", "reason": "INSTALLED_SHAPE_OK"},
+    {"id": "SCRATCH-NO-EFFECTS", "fixture": "global_effect_attempt_in_scratch", "expected": "BLOCK", "reason": "SCRATCH_GLOBAL_EFFECT"},
+    {"id": "SCRATCH-PIDS", "fixture": "live_pid_birth_identity_changed", "expected": "BLOCK", "reason": "LIVE_PROCESS_TOUCHED"},
+    {"id": "ROLLBACK-PREIMAGE", "fixture": "mid_transaction_failure", "expected": "PASS", "reason": "EXACT_PREIMAGE_RESTORED"},
+    {"id": "ROLLBACK-FORWARD", "fixture": "new_release_restores_prior_payload", "expected": "PASS", "reason": "FORWARD_CORRECTION_OK"},
+    {"id": "CONT-DUPLICATE-OWNER", "fixture": "two_workers_one_specialist", "expected": "BLOCK", "reason": "RUNWAY_UNDER_MINIMUM"},
+    {"id": "CONT-STALE-REVIEW", "fixture": "review_card_without_current_reviewer", "expected": "BLOCK", "reason": "STALE_REVIEW"},
+    {"id": "CONT-ALL-GATED", "fixture": "one_lane_all_others_gated", "expected": "PASS", "reason": "ONE_LANE_JUSTIFIED"},
+    {"id": "CONT-MISSING-SKILL", "fixture": "ready_task_forced_skill_missing", "expected": "BLOCK", "reason": "PREFLIGHT_SKILL_MISSING"},
+    {"id": "CONT-COLLISION", "fixture": "two_ready_tasks_same_target", "expected": "BLOCK", "reason": "TARGET_COLLISION"},
+    {"id": "CONT-HISTORICAL-SUCCESSOR", "fixture": "critical_path_only_done_child", "expected": "BLOCK", "reason": "SUCCESSOR_MISSING"},
+    {"id": "CONT-ARCHIVED-SUCCESSOR", "fixture": "critical_path_only_archived_child", "expected": "BLOCK", "reason": "SUCCESSOR_MISSING"},
+    {"id": "CONT-MALFORMED-SUCCESSOR", "fixture": "critical_path_malformed_child", "expected": "BLOCK", "reason": "SUCCESSOR_MISSING"},
+    {"id": "CONT-ALLOWED-SUCCESSOR", "fixture": "critical_path_ready_child", "expected": "PASS", "reason": "SUCCESSOR_STAGED"},
+    {"id": "CONT-ALERT-REDACTION", "fixture": "sensitive_claim_fault", "expected": "PASS", "reason": "ALERT_ALLOWLIST_ONLY"},
+    {"id": "LAUNCHD-RUNATLOAD", "fixture": "isolated_launchd_run_at_load_and_interval", "expected": "PASS", "reason": "LAUNCHD_CANARY_OK"},
+    {"id": "LAUNCHD-ABSENCE", "fixture": "isolated_launchd_bootout", "expected": "PASS", "reason": "LABEL_ABSENT"},
+    {"id": "GATEWAY-PROFILE", "fixture": "profile_gateway_wrong_runtime", "expected": "BLOCK", "reason": "GATEWAY_RUNTIME_MISMATCH"},
+    {"id": "DASHBOARD-CONTRADICTION", "fixture": "dashboard_health_disagrees_with_authority", "expected": "BLOCK", "reason": "DASHBOARD_NON_AUTHORITATIVE_CONTRADICTION"},
+    {"id": "SCHED-WEBSITE-BLOCK", "fixture": "preventive_start_before_website_pass", "expected": "BLOCK", "reason": "WEBSITE_PRIORITY_GATE"},
+    {"id": "VERDICT-DONE-BLOCK", "fixture": "done_parent_with_block_verdict", "expected": "BLOCK", "reason": "PARENT_NOT_PASS"}
+  ],
+  "incident_regression": {
+    "required_sequence": [
+      "minimized_fixture",
+      "prior_baseline_RED",
+      "minimal_correction",
+      "focused_GREEN",
+      "full_suite_GREEN",
+      "manifest_binding",
+      "independent_exact_byte_rerun"
+    ],
+    "rejected_artifact_policy": "preserve_immutable_and_label_BLOCK",
+    "retirement_rule": "versioned replacement contract proves threat path absent"
+  },
+  "handoff": {
+    "scratch_launchd": {
+      "separate_label": true,
+      "non_root": true,
+      "synthetic_roots": true,
+      "run_at_load": true,
+      "interval_seconds": 60,
+      "minimum_interval_advances": 1,
+      "bootout_and_absence": true,
+      "unchanged_live_pid_birth_identities": true
+    },
+    "live_sequence": [
+      "freeze_manifest_receipts_preimages",
+      "exact_byte_PASS",
+      "Rook_exact_release_authorization",
+      "supported_core_update",
+      "transactional_root_profile_install",
+      "restart_manifest_scope_only",
+      "installed_byte_and_process_identity_readback",
+      "two_watchdog_intervals",
+      "profile_scoped_gateway_readback",
+      "dashboard_read_through_consistency",
+      "independent_active_state_verification"
+    ]
+  },
+  "evidence_reconciliation": {
+    "cv_a01": {
+      "verdict": "PASS",
+      "accepted_commit": "3fac3d9a2d64eee47aa425b480fe4721bd4487d8",
+      "accepted_tree": "db2ee8bbdfa95ba9bcca5057eea9375c0e6f1652",
+      "plugin_version": "1.5.0",
+      "task": "t_13b90c53",
+      "rejected_vectors": ["CV-A01-R1", "CV-A01-R2", "CV-A01-R3", "CV-A01-R4"]
+    },
+    "continuity_initial": {
+      "verdict": "BLOCK",
+      "commit": "0c12c6648a343c946713150bd2de9a6a82a3562f",
+      "review_task": "t_3fbf61b1",
+      "reason_codes": [
+        "ACTIVATED_BEFORE_REVIEW",
+        "RUNWAY_NOT_SPECIALIST_UNIQUE",
+        "STANDALONE_EVIDENCE_INCOMPLETE",
+        "SUCCESSOR_OUTPUT_MISSING",
+        "ALERT_DISCLOSURE",
+        "STALE_MIGRATION_STATE",
+        "LAUNCHD_CANARY_INCOMPLETE"
+      ]
+    },
+    "continuity_correction_1": {
+      "verdict": "BLOCK",
+      "commit": "beb414cd4fd8007fd655f66a421bf6d1e64f6b36",
+      "tree": "0fa0e514df5b0c4823fb51f1b3f5e50b94e5c770",
+      "review_task": "t_79906740",
+      "accepted_controls": [
+        "unique_specialist_runway",
+        "standalone_advancing_lease",
+        "alert_allowlist_projection",
+        "legacy_state_pruning",
+        "isolated_launchd_canary"
+      ],
+      "remaining_reason_codes": [
+        "HISTORICAL_CHILD_SATISFIES_SUCCESSOR",
+        "ROLLBACK_DOCUMENTATION_STALE"
+      ]
+    },
+    "current_correction_task": "t_5dc0acb5",
+    "required_next_review_task": "t_a6886f6a",
+    "activation_gate_task": "t_8fd7780f"
+  },
+  "backlog": [
+    {
+      "id": "B01",
+      "title": "Contract validator and canonical receipt schema",
+      "owner": "Oliver",
+      "depends_on": [],
+      "acceptance": [
+        "reject unknown fields and enums",
+        "validate every gate input/output fixture",
+        "canonical serialization is byte-stable",
+        "negative fixtures produce named reason codes"
+      ]
+    },
+    {
+      "id": "B02",
+      "title": "Incident fixture pack and RED baselines",
+      "owner": "Oliver",
+      "depends_on": ["B01"],
+      "acceptance": [
+        "every test_vectors id has one minimized non-secret fixture",
+        "all historical defects are RED on their affected baseline",
+        "receipts bind baseline commit/tree and reason code"
+      ]
+    },
+    {
+      "id": "B03",
+      "title": "Deterministic manifest-bound release builder",
+      "owner": "Oliver",
+      "depends_on": ["B01", "B02"],
+      "acceptance": [
+        "double build yields identical manifest and payload bytes",
+        "all required components and exact destinations are bound",
+        "missing or extra file blocks",
+        "no secret or mutable state enters release"
+      ]
+    },
+    {
+      "id": "B04",
+      "title": "Transactional distributor and installed-shape scratch harness",
+      "owner": "Oliver",
+      "depends_on": ["B03"],
+      "acceptance": [
+        "root plus eight named profile copies install atomically in synthetic roots",
+        "arbitrary cwd and minimal environment pass",
+        "missing helper/profile and partial install fail",
+        "global effects suppressed and live PID birth identities unchanged"
+      ]
+    },
+    {
+      "id": "B05",
+      "title": "Authority, lease, finalisation, and confinement controls",
+      "owner": "Oliver",
+      "depends_on": ["B02", "B04"],
+      "acceptance": [
+        "all CV-A01 and AUTH vectors GREEN",
+        "claim, heartbeat, detached progress, PID reuse, and finalisation vectors GREEN",
+        "casefold and filesystem-identity protected floors hold"
+      ]
+    },
+    {
+      "id": "B06",
+      "title": "Supported updater and rollback rehearsal",
+      "owner": "Oliver",
+      "depends_on": ["B03", "B04", "B05"],
+      "acceptance": [
+        "supported updater lands approved full commit/tree in synthetic install",
+        "channel movement blocks",
+        "mid-transaction failure restores exact preimages within 300 seconds",
+        "new forward corrective release restores prior payload and compatible schema"
+      ]
+    },
+    {
+      "id": "B07",
+      "title": "Continuity, launchd, gateway, dashboard, and alert canaries",
+      "owner": "Oliver",
+      "depends_on": ["B04", "B05", "B06"],
+      "acceptance": [
+        "all CONT, LAUNCHD, GATEWAY, DASHBOARD, SCHED, and VERDICT vectors GREEN",
+        "classification totals reconcile",
+        "two-to-three unique-specialist policy holds",
+        "external alerts contain allowed fields only"
+      ]
+    },
+    {
+      "id": "B08",
+      "title": "Independent exact-byte review",
+      "owner": "Maya",
+      "depends_on": ["B07"],
+      "acceptance": [
+        "review exact frozen bytes and all receipts",
+        "rerun full vector matrix",
+        "literal PASS with zero findings",
+        "rejected candidates remain BLOCK"
+      ]
+    },
+    {
+      "id": "B09",
+      "title": "Authorized live activation",
+      "owner": "Oliver",
+      "depends_on": ["B08"],
+      "manual_gates": ["G40_WEBSITE_PRIORITY", "G41_CONTINUITY_ACTIVE", "Rook authorization"],
+      "acceptance": [
+        "one manifest transaction",
+        "supported updater and transactional distribution",
+        "only declared restart scope changes",
+        "installed-byte readback and complete transaction receipt"
+      ]
+    },
+    {
+      "id": "B10",
+      "title": "Independent active-state review and SLO baseline",
+      "owner": "Maya",
+      "depends_on": ["B09"],
+      "acceptance": [
+        "literal active-state PASS with zero findings",
+        "two advancing watchdog intervals",
+        "exact runtime imports and profile gateway ownership",
+        "dashboard consistency without authority",
+        "initial SLO counters recorded without sensitive content"
+      ]
+    }
+  ]
+}
