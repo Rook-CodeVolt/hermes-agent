@@ -1474,6 +1474,94 @@ def dispatch_once(
     return result
 
 
+def dispatch_exact(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    spawn_fn=None,
+    ttl_seconds: Optional[int] = None,
+    dry_run: bool = False,
+    max_in_progress: Optional[int] = None,
+    failure_limit: int = DEFAULT_FAILURE_LIMIT,
+    board: Optional[str] = None,
+    default_assignee: Optional[str] = None,
+    max_in_progress_per_profile: Optional[int] = None,
+) -> DispatchResult:
+    """CAS-dispatch one named ready/review task without scanning the queue.
+
+    The board dispatch lock serializes this path with the interval dispatcher;
+    :func:`claim_task` / :func:`claim_review_task` remains the authoritative
+    status-and-claim CAS. Unlike a normal tick, exact dispatch does not reclaim,
+    promote, or otherwise mutate unrelated cards.
+    """
+
+    def _locked_dispatch() -> DispatchResult:
+        result = DispatchResult()
+        may_spawn, _ = _tick_spawn_budget(
+            conn, result, max_spawn=None, max_in_progress=max_in_progress, board=board,
+        )
+        if not may_spawn:
+            return result
+        row = conn.execute(
+            "SELECT id, assignee, status FROM tasks "
+            "WHERE id = ? AND status IN ('ready', 'review') AND claim_lock IS NULL",
+            (task_id,),
+        ).fetchone()
+        if row is None or (row["status"] == "review" and not review_dispatch_enabled()):
+            return result
+
+        assignee = row["assignee"]
+        if not assignee:
+            assignee = _resolve_default_assignee(default_assignee)
+            if not assignee or not _apply_default_assignee(
+                conn, task_id, assignee, dry_run=dry_run,
+            ):
+                result.skipped_unassigned.append(task_id)
+                return result
+            result.auto_assigned_default.append(task_id)
+
+        per_profile_cap = (
+            max_in_progress_per_profile
+            if isinstance(max_in_progress_per_profile, int) and max_in_progress_per_profile > 0
+            else None
+        )
+        per_profile_running: dict[str, int] = {}
+        if per_profile_cap is not None:
+            running = conn.execute(
+                "SELECT COUNT(*) AS n FROM tasks WHERE status = 'running' AND assignee = ?",
+                (assignee,),
+            ).fetchone()
+            per_profile_running[assignee] = int(running["n"])
+        _dispatch_lane_task(
+            conn,
+            row,
+            assignee,
+            result,
+            lane=row["status"],
+            dry_run=dry_run,
+            ttl_seconds=ttl_seconds,
+            board=board,
+            failure_limit=failure_limit,
+            spawn_fn=spawn_fn,
+            per_profile_cap=per_profile_cap,
+            per_profile_running=per_profile_running,
+        )
+        return result
+
+    try:
+        db_path = _kb.kanban_db_path(board=board)
+    except Exception:
+        result = _locked_dispatch()
+        _kb._fire_dispatch_tick_hook(result, board=board, dry_run=dry_run)
+        return result
+    with _kbc._dispatch_tick_lock(db_path) as held:
+        result = _locked_dispatch() if held else DispatchResult(skipped_locked=True)
+        if held:
+            _kbc._maybe_checkpoint_wal(conn, db_path)
+    _kb._fire_dispatch_tick_hook(result, board=board, dry_run=dry_run)
+    return result
+
+
 def _call_spawn_fn(spawn_fn, task: Task, workspace: str, board: Optional[str]) -> Optional[int]:
     """Back-compat: older spawn_fn signatures (and test stubs) accept only
     ``(task, workspace)``; pass ``board`` only when the callable supports it."""

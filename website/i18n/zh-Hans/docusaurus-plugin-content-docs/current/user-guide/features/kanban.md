@@ -575,7 +575,8 @@ hermes kanban watch [--assignee P] [--tenant T]        # 将所有事件实时�
 hermes kanban heartbeat <id> [--note "..."]            # 长时间操作的 worker 存活信号
 hermes kanban runs <id> [--json]                       # 尝试历史（每次运行一行）
 hermes kanban assignees [--json]                       # 磁盘上的配置文件 + 每受让人任务计数
-hermes kanban dispatch [--dry-run] [--max N]           # 单次扫描
+hermes kanban dispatch [--task-id <id>] [--dry-run]    # 单次扫描，可仅调度指定任务
+        [--max N]
         [--failure-limit N] [--json]
 hermes kanban daemon --force                           # 已弃用 —— 独立调度器（改用 `hermes gateway start`）
         [--failure-limit N] [--pidfile PATH] [-v]

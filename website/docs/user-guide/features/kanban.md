@@ -764,7 +764,8 @@ hermes kanban watch [--assignee P] [--tenant T]        # live stream ALL events 
 hermes kanban heartbeat <id> [--note "..."]            # worker liveness signal for long ops
 hermes kanban runs <id> [--json]                       # attempt history (one row per run)
 hermes kanban assignees [--json]                       # profiles on disk + per-assignee task counts
-hermes kanban dispatch [--dry-run] [--max N]           # one-shot pass
+hermes kanban dispatch [--task-id <id>] [--dry-run]    # one-shot pass, optionally exact-task only
+        [--max N]
         [--failure-limit N] [--json]
 hermes kanban daemon --force                           # DEPRECATED — standalone dispatcher (use `hermes gateway start` instead)
         [--failure-limit N] [--pidfile PATH] [-v]

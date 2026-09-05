@@ -82,15 +82,20 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
         default_assignee = max_in_progress_per_profile = max_in_progress = None
         max_spawn = getattr(args, "max", None)
     with kbc.connect_closing() as conn:
-        res = kbd.dispatch_once(
-            conn,
+        common = dict(
             dry_run=args.dry_run,
-            max_spawn=max_spawn,
             max_in_progress=max_in_progress,
             failure_limit=getattr(args, "failure_limit", kbd.DEFAULT_FAILURE_LIMIT),
             default_assignee=default_assignee,
             max_in_progress_per_profile=max_in_progress_per_profile,
         )
+        task_id = getattr(args, "task_id", None)
+        if task_id:
+            # Exact dispatch is intrinsically capped at one; --max remains
+            # accepted so callers can use the defensive ``--max 1`` spelling.
+            res = kbd.dispatch_exact(conn, task_id, **common)
+        else:
+            res = kbd.dispatch_once(conn, max_spawn=max_spawn, **common)
     if getattr(args, "json", False):
         _print_json({
             **{k: getattr(res, k)
