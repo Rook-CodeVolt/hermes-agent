@@ -828,7 +828,7 @@ def test_rc4_candidate_preserves_accepted_work_claims_1_6_1() -> None:
     assert spec["production_profiles"] == []
     assert {item["relative_destination"] for item in spec["destinations"]} == expected_destinations
     assert not [item for item in spec["destinations"] if item["destination_class"] == "plugin"]
-    assert spec["release_channel"] == "candidate/codevolt-control-plane-rc4-continuity-source"
+    assert spec["release_channel"] == "candidate/codevolt-control-plane-current-runtime-source-t_aa593db4"
     assert manifest["release_id"] == spec["release_id"]
     assert manifest["release_channel"] == spec["release_channel"]
     assert manifest["policy_version"] == "cv-continuity-guard-v1"

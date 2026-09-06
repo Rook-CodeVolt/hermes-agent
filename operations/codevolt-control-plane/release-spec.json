@@ -74,8 +74,8 @@
   },
   "policy_version": "cv-continuity-guard-v1",
   "production_profiles": [],
-  "release_channel": "candidate/codevolt-control-plane-rc4-continuity-source",
-  "release_id": "cv-control-plane-2026-09-05-rc4-remediation1",
+  "release_channel": "candidate/codevolt-control-plane-current-runtime-source-t_aa593db4",
+  "release_id": "cv-control-plane-2026-09-06-current-runtime-t_aa593db4",
   "restart_scope": [
     "ai.hermes.gateway",
     "ai.hermes.gateway-clara",
