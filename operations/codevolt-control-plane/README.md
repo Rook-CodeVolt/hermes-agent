@@ -30,6 +30,10 @@ From any working directory, using the frozen repository checkout:
 
 The source tree must be committed and every source byte must equal `HEAD:<path>`. The output directory must not already exist. At freeze time the builder also parses both packaged activation-manifest copies and requires every documented SHA-256 row to equal the corresponding manifest payload digest. The command emits a closed JSON receipt with release ID, manifest SHA-256, archive SHA-256 and literal PASS. Build twice into two absent directories and compare both files byte-for-byte.
 
+Runtime capability preservation
+
+Before any future runtime update, run `scripts/runtime_capability_inventory.py snapshot --repo <pre-update-checkout>` and preserve the canonical JSON receipt. After the update candidate is available, snapshot that exact checkout and run `scripts/runtime_capability_inventory.py compare --before <before.json> --after <after.json>`. Comparison blocks any capability loss and requires both exact-task dispatch and its global/per-profile concurrency controls in the post-update runtime. The inventory parses source only: it does not import Hermes, open a board, recompute readiness, or dispatch work. For this candidate, the frozen before/after/compare receipts under `receipts/` record the known current-runtime absence and candidate restoration; a fresh live activation must repeat the checks against its immediate preimage and exact reviewed source.
+
 Typed gate receipt validation
 
     python /absolute/repo/scripts/control_plane_release.py validate-gate \
