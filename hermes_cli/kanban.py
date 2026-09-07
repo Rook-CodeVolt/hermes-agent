@@ -211,7 +211,7 @@ def _profile_author() -> str:
 
 
 _DELEGATED_CHILD_DENIED_ACTIONS: frozenset[str] = frozenset({
-    "init", "create", "swarm", "assign", "reclaim", "reassign", "link", "unlink",
+    "init", "create", "swarm", "assign", "reclaim", "reassign", "link", "unlink", "supersede",
     "claim", "comment", "attach", "attach-rm", "complete", "edit", "block",
     "schedule", "unblock", "promote", "archive", "dispatch", "daemon", "repair",
     "heartbeat", "notify-subscribe", "notify-unsubscribe", "specify", "decompose",
@@ -701,6 +701,24 @@ def _cmd_unlink(args: argparse.Namespace) -> int:
         ok = kb.unlink_tasks(conn, args.parent_id, args.child_id)
     return _ok_or_err(ok, f"No such link: {args.parent_id} -> {args.child_id}",
                       f"Unlinked {args.parent_id} -> {args.child_id}")
+
+
+def _cmd_supersede(args: argparse.Namespace) -> int:
+    with kbc.connect_closing() as conn:
+        receipt = kb.supersede_task(
+            conn,
+            args.old_task_id,
+            args.replacement_task_id,
+            actor=_profile_author(),
+        )
+    if getattr(args, "json", False):
+        _print_json(receipt)
+    else:
+        print(
+            f"Superseded {args.old_task_id} with {args.replacement_task_id}; "
+            f"replaced {len(receipt['children'])} outgoing dependency edge(s)"
+        )
+    return 0
 
 
 def _cmd_claim(args: argparse.Namespace) -> int:
@@ -1222,7 +1240,7 @@ _HANDLERS = {
     "assign": _cmd_assign, "set-model": _cmd_set_model,
     "reclaim": _cmd_reclaim, "reassign": _cmd_reassign,
     "diagnostics": _cmd_diagnostics, "diag": _cmd_diagnostics,
-    "link": _cmd_link, "unlink": _cmd_unlink, "claim": _cmd_claim,
+    "link": _cmd_link, "unlink": _cmd_unlink, "supersede": _cmd_supersede, "claim": _cmd_claim,
     "comment": _cmd_comment, "attach": _cmd_attach,
     "attachments": _cmd_attachments, "attach-rm": _cmd_attach_rm,
     "complete": _cmd_complete, "edit": _cmd_edit, "block": _cmd_block,
