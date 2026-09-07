@@ -12,8 +12,8 @@ concurrency:
 
 env:
   BASE_SHA: 245e48008fa814b3251f50755eb656bd9fb86cb1
-  TARGET_SHA: 838433f353490fee2dd12aa0c34ddc2d25a1121f
-  TARGET_TREE: 1387ab01cc7ed9fca6ea13f2543ad67ac336adc3
+  TARGET_SHA: 9fa123b250cf6aa13a6331ea5041f3f0a8223f65
+  TARGET_TREE: 1f0f2966adc3ac8fa76d418fa1222ccb19c2ccac
 
 jobs:
   attribution:
@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: Rook-CodeVolt/hermes-agent
-          ref: 838433f353490fee2dd12aa0c34ddc2d25a1121f
+          ref: 9fa123b250cf6aa13a6331ea5041f3f0a8223f65
           fetch-depth: 0
           persist-credentials: false
 
