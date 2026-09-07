@@ -1,0 +1,81 @@
+name: F2 exact-head attribution
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f2-exact-head-attribution
+  cancel-in-progress: false
+
+env:
+  BASE_SHA: 245e48008fa814b3251f50755eb656bd9fb86cb1
+  TARGET_SHA: 795b96b4f26270bd750bded22114532d203f8509
+  TARGET_TREE: b1b8a17394d64a1923453fd2322beccc54c38d75
+
+jobs:
+  attribution:
+    name: Contributor attribution (exact F2 range)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Restrict dispatch to fork owner
+        env:
+          ACTOR: ${{ github.actor }}
+        run: test "$ACTOR" = "Rook-CodeVolt"
+
+      - name: Checkout exact candidate and history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: Rook-CodeVolt/hermes-agent
+          ref: 795b96b4f26270bd750bded22114532d203f8509
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove exact candidate identity and range
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          ACTUAL_TREE="$(git rev-parse HEAD^{tree})"
+          echo "BASE=$BASE_SHA"
+          echo "HEAD=$ACTUAL_SHA"
+          echo "TREE=$ACTUAL_TREE"
+          test "$ACTUAL_SHA" = "$TARGET_SHA"
+          test "$ACTUAL_TREE" = "$TARGET_TREE"
+          git cat-file -e "$BASE_SHA^{commit}"
+          git merge-base --is-ancestor "$BASE_SHA" "$TARGET_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Check contributor attribution over exact candidate range
+        shell: bash
+        run: |
+          set -euo pipefail
+          NEW_EMAILS=$(git log "${BASE_SHA}..${TARGET_SHA}" \
+            --format='%ae' --no-merges | sort -u)
+          test -n "$NEW_EMAILS"
+          MISSING=""
+          while IFS= read -r email; do
+            case "$email" in
+              *teknium*|*noreply@github.com*|*dependabot*|*github-actions*|*anthropic.com*|*cursor.com*)
+                continue ;;
+            esac
+            if echo "$email" | grep -qP '\+.*@users\.noreply\.github\.com'; then
+              continue
+            fi
+            if [ -f "contributors/emails/${email}" ]; then
+              continue
+            fi
+            if ! grep -qF "\"${email}\"" scripts/release.py 2>/dev/null; then
+              AUTHOR=$(git log --author="$email" --format='%an' -1)
+              MISSING="${MISSING}\n  ${email} (${AUTHOR})"
+            fi
+          done <<< "$NEW_EMAILS"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Unmapped contributor email(s) in exact F2 range"
+            echo -e "$MISSING"
+            exit 1
+          fi
+          echo "All contributor emails in exact F2 range are mapped or auto-resolve."
