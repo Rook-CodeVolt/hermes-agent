@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  TARGET_SHA: 795b96b4f26270bd750bded22114532d203f8509
-  TARGET_TREE: b1b8a17394d64a1923453fd2322beccc54c38d75
+  TARGET_SHA: 838433f353490fee2dd12aa0c34ddc2d25a1121f
+  TARGET_TREE: 1387ab01cc7ed9fca6ea13f2543ad67ac336adc3
   OPENROUTER_API_KEY: ""
   OPENAI_API_KEY: ""
   NOUS_API_KEY: ""
@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: Rook-CodeVolt/hermes-agent
-          ref: 795b96b4f26270bd750bded22114532d203f8509
+          ref: 838433f353490fee2dd12aa0c34ddc2d25a1121f
           persist-credentials: false
 
       - name: Prove exact candidate identity
@@ -108,7 +108,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: Rook-CodeVolt/hermes-agent
-          ref: 795b96b4f26270bd750bded22114532d203f8509
+          ref: 838433f353490fee2dd12aa0c34ddc2d25a1121f
           persist-credentials: false
 
       - name: Prove exact candidate identity
