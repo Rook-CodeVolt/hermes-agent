@@ -1621,6 +1621,121 @@ def unlink_tasks(conn: sqlite3.Connection, parent_id: str, child_id: str) -> boo
     return removed
 
 
+def _is_historical_claim_record(conn: sqlite3.Connection, task_id: str) -> bool:
+    row = conn.execute("SELECT created_by FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    return bool(row) and str(row["created_by"] or "") == "work-claims"
+
+
+def _reconcile_superseded_children(conn: sqlite3.Connection, affected_ids: list[str]) -> None:
+    """Re-gate only ``affected_ids`` inside the caller's write transaction.
+
+    A supersession must not expose its new edge set before readiness agrees with
+    it.  The global ``recompute_ready`` helper owns a separate transaction and
+    may promote unrelated work, so this operation deliberately implements the
+    same lifecycle rules for the bounded affected set.
+    """
+    for task_id in affected_ids:
+        row = conn.execute(
+            "SELECT status, consecutive_failures, max_retries FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if row is None or row["status"] in ("done", "archived", "triage", "scheduled"):
+            continue
+        parents_satisfied = _parents_satisfied(conn, task_id)
+        if not parents_satisfied:
+            if row["status"] in ("ready", "review"):
+                conn.execute("UPDATE tasks SET status = 'todo' WHERE id = ?", (task_id,))
+            continue
+        if row["status"] == "todo":
+            resume_status = _resume_status_from_events(conn, task_id)
+        elif row["status"] == "blocked":
+            if _has_sticky_block(conn, task_id):
+                continue
+            failures = int(row["consecutive_failures"] or 0)
+            task_limit = row["max_retries"]
+            effective_limit = int(task_limit) if task_limit is not None else DEFAULT_FAILURE_LIMIT
+            if failures >= effective_limit:
+                continue
+            resume_status = _resume_status_from_events(conn, task_id)
+        else:
+            continue
+        conn.execute("UPDATE tasks SET status = ? WHERE id = ?", (resume_status, task_id))
+        _append_event(
+            conn,
+            task_id,
+            "promoted",
+            {"status": resume_status} if resume_status != "ready" else None,
+        )
+
+
+def supersede_task(
+    conn: sqlite3.Connection,
+    old_task_id: str,
+    replacement_task_id: str,
+    *,
+    actor: str,
+) -> dict:
+    """Atomically replace an old task's outgoing dependency edges.
+
+    Both tasks and all historical evidence remain intact.  Validation, edge
+    replacement, affected-child readiness and audit events share one durable
+    transaction, so any failure leaves the complete pre-operation state.
+    """
+    if old_task_id == replacement_task_id:
+        raise ValueError("a task cannot supersede itself")
+    actor = str(actor or "").strip()
+    if not actor:
+        raise ValueError("actor is required")
+
+    with write_txn(conn):
+        missing = _missing_task_ids(conn, (old_task_id, replacement_task_id))
+        if missing:
+            raise ValueError(f"unknown task(s): {', '.join(missing)}")
+        if _is_historical_claim_record(conn, old_task_id) or _is_historical_claim_record(
+            conn, replacement_task_id
+        ):
+            raise ValueError("historical claim records cannot participate in supersession")
+
+        children = child_ids(conn, old_task_id)
+        if children:
+            placeholders = ",".join("?" for _ in children)
+            active_rows = conn.execute(
+                f"SELECT id FROM tasks WHERE id IN ({placeholders}) "
+                "AND (status = 'running' OR claim_lock IS NOT NULL) ORDER BY id",
+                tuple(children),
+            ).fetchall()
+            active_children = [row["id"] for row in active_rows]
+            if active_children:
+                raise RuntimeError(
+                    "cannot supersede dependencies of active child task(s): "
+                    + ", ".join(active_children)
+                )
+
+        for child_id in children:
+            if child_id == replacement_task_id or _would_cycle(conn, replacement_task_id, child_id):
+                raise ValueError(
+                    f"superseding {old_task_id} with {replacement_task_id} for "
+                    f"{child_id} would create a cycle"
+                )
+
+        for child_id in children:
+            _link(conn, replacement_task_id, child_id)
+        conn.execute("DELETE FROM task_links WHERE parent_id = ?", (old_task_id,))
+        _reconcile_superseded_children(conn, children)
+
+        payload = {
+            "old_task_id": old_task_id,
+            "replacement_task_id": replacement_task_id,
+            "children": children,
+            "actor": actor,
+        }
+        _append_event(conn, old_task_id, "superseded", payload)
+        _append_event(conn, replacement_task_id, "supersession_applied", payload)
+        for child_id in children:
+            _append_event(conn, child_id, "dependency_superseded", payload)
+    return payload
+
+
 def _linked_ids(conn: sqlite3.Connection, want: str, where: str, task_id: str) -> list[str]:
     rows = conn.execute(
         f"SELECT {want} FROM task_links WHERE {where} = ? ORDER BY {want}", (task_id,)
