@@ -169,6 +169,7 @@ class TestMissedSteerRetention:
         parent._delegate_depth = 0
         parent.model = "test-model"
         parent.interactive_mode = False
+        parent._session_db = None
 
         with patch("run_agent.AIAgent") as MockAgent:
             mock_child = MagicMock()
@@ -206,6 +207,7 @@ class TestMissedSteerRetention:
         parent._delegate_depth = 0
         parent.model = "test-model"
         parent.interactive_mode = False
+        parent._session_db = None
 
         with patch("run_agent.AIAgent") as MockAgent:
             mock_child = MagicMock()
