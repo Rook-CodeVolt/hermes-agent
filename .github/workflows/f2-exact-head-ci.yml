@@ -91,6 +91,9 @@ jobs:
         shell: bash
         run: |
           git diff --check
+          echo "::group::Sanitized git status (status and filename only)"
+          git -c core.quotePath=true status --porcelain=v1 --untracked-files=all
+          echo "::endgroup::"
           test -z "$(git status --porcelain)"
 
   windows:
