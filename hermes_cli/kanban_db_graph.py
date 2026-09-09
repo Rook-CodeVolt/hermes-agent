@@ -34,7 +34,7 @@ def initial_task_state(
     rows = {}
     if parents:
         rows = {row["id"]: row for row in conn.execute(
-            "SELECT id, status, tenant FROM tasks WHERE id IN "
+            "SELECT id, status, tenant, completion_outcome FROM tasks WHERE id IN "
             "(" + ",".join("?" * len(parents)) + ")", parents,
         )}
         missing = [pid for pid in parents if pid not in rows]
@@ -46,7 +46,11 @@ def initial_task_state(
         return "blocked", tenant
     if triage:
         return "triage", tenant
-    if any(row["status"] != "done" for row in rows.values()):
+    if any(
+        row["status"] != "done"
+        or (row["completion_outcome"] or "completed") not in {"completed", "pass"}
+        for row in rows.values()
+    ):
         return "todo", tenant
     return "ready", tenant
 

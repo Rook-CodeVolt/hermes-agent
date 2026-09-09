@@ -285,6 +285,8 @@ _SPECS = [
         _arg("--result", help="Result summary"),
         _arg("--summary",
              help="Structured handoff summary for downstream tasks. Falls back to --result if omitted."),
+        _arg("--outcome", choices=("completed", "pass", "block", "changes_required"),
+             help="Semantic verdict; only completed/pass release dependent tasks."),
         _arg("--metadata",
              help='JSON dict of structured facts (e.g. \'{"changed_files": [...], '
                   '"tests_run": 12}\'). Stored on the closing run.'),

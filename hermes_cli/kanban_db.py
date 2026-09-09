@@ -87,6 +87,8 @@ def _git_out(cwd: Path, *args: str, timeout: int = 30) -> Optional[str]:
 # --- Constants ---
 
 VALID_STATUSES = {"triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"}
+VALID_COMPLETION_OUTCOMES = {"completed", "pass", "block", "changes_required"}
+DEPENDENCY_SATISFYING_OUTCOMES = {"completed", "pass"}
 VALID_INITIAL_STATUSES = {"running", "blocked"}
 
 # Typed block reasons (routing in ``_route_block``); ``None`` = legacy un-typed.
@@ -715,6 +717,9 @@ class Task:
     block_kind: Optional[str] = None
     block_recurrences: int = 0               # unblock-loop counter, see BLOCK_RECURRENCE_LIMIT
     completion_contract: Optional[str] = None
+    # Lifecycle state and semantic verdict are separate. Only accepted outcomes
+    # satisfy downstream dependencies; legacy NULL rows read as ``completed``.
+    completion_outcome: Optional[str] = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Task":
@@ -744,7 +749,7 @@ _TASK_REQUIRED_COLUMNS = (
 _TASK_OPTIONAL_COLUMNS = (
     "branch_name", "project_id", "tenant", "result", "idempotency_key", "worker_pid",
     "max_runtime_seconds", "last_heartbeat_at", "current_run_id", "workflow_template_id",
-    "current_step_key", "max_retries", "session_id", "completion_contract",
+    "current_step_key", "max_retries", "session_id", "completion_contract", "completion_outcome",
 )
 # Text columns where "" is stored/read as "not set".
 _TASK_EMPTY_IS_NULL_COLUMNS = (
@@ -923,6 +928,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- Goal-loop turn budget for ``goal_mode`` workers. NULL = use the
     -- goals-engine default.
     goal_max_turns       INTEGER,
+    -- Semantic result of a completed task. Lifecycle ``done`` is not enough
+    -- to release children: only ``completed`` and ``pass`` are accepted.
+    -- NULL preserves the historical meaning for pre-migration rows.
+    completion_outcome   TEXT,
     -- Originating chat/agent session id when the task was created from
     -- inside an agent loop that propagated ``HERMES_SESSION_ID``. NULL
     -- for tasks created from the CLI, dashboard, or any path that doesn't
@@ -930,8 +939,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- larger boards.
     session_id           TEXT,
     -- Typed block reason set by ``block_task`` (one of VALID_BLOCK_KINDS, or
-    -- NULL for legacy/un-typed blocks). Drives routing: ``dependency`` never
-    -- sits in ``blocked`` (goes to ``todo`` for parent-gating); the others go
+    -- NULL for legacy/un-typed blocks). Drives routing: a valid ``dependency``
+    -- wait goes to ``todo`` for parent-gating; an invalid one is sticky blocked.
     -- to ``blocked`` for a human. Preserved across unblock so a re-block for
     -- the SAME kind can be recognised as a loop.
     block_kind           TEXT,
@@ -1577,8 +1586,8 @@ def link_tasks(conn: sqlite3.Connection, parent_id: str, child_id: str) -> None:
         if _would_cycle(conn, parent_id, child_id):
             raise ValueError(f"linking {parent_id} -> {child_id} would create a cycle")
         _link(conn, parent_id, child_id)
-        # If child was ready but parent is not yet done, demote child to todo.
-        if _task_status(conn, parent_id) != "done":
+        # If child was ready but the parent has no accepted outcome, demote it.
+        if not _parents_satisfied(conn, child_id):
             conn.execute(
                 "UPDATE tasks SET status = 'todo' WHERE id = ? AND status = 'ready'", (child_id,),
             )
@@ -2066,7 +2075,7 @@ def _synthesize_ended_run(
 # --- Dependency resolution (todo -> ready) ---
 
 def _has_sticky_block(conn: sqlite3.Connection, task_id: str) -> bool:
-    """True when the newest ``blocked``/``unblocked`` event is ``blocked`` — an
+    """True when the newest block/unblock event is a sticky block — an
     explicit ``kanban_block`` that must wait for an operator. A breaker trip
     emits ``gave_up`` (not ``blocked``) and so auto-recovers, as does a task
     with no such event at all (direct DB edit).
@@ -2078,10 +2087,10 @@ def _has_sticky_block(conn: sqlite3.Connection, task_id: str) -> bool:
     """
     row = conn.execute(
         "SELECT kind FROM task_events "
-        "WHERE task_id = ? AND kind IN ('blocked', 'unblocked') "
+        "WHERE task_id = ? AND kind IN ('blocked', 'invalid_dependency_block', 'unblocked') "
         "ORDER BY id DESC LIMIT 1", (task_id,),
     ).fetchone()
-    return bool(row) and row["kind"] == "blocked"
+    return bool(row) and row["kind"] in {"blocked", "invalid_dependency_block"}
 
 
 def _latest_event(
@@ -2102,7 +2111,7 @@ def _resume_status_from_events(conn: sqlite3.Connection, task_id: str) -> str:
     row = conn.execute(
         "SELECT payload FROM task_events "
         "WHERE task_id = ? AND kind IN ("
-        "'blocked', 'block_loop_detected', 'dependency_wait', 'gave_up', "
+        "'blocked', 'invalid_dependency_block', 'block_loop_detected', 'dependency_wait', 'gave_up', "
         "'unblocked', 'changes_requested', 'review_reopened', 'status', 'reclaimed', "
         "'stale', 'timed_out', 'crashed', 'spawn_failed', 'rate_limited'"
         ") ORDER BY id DESC LIMIT 1", (task_id,),
@@ -2115,7 +2124,7 @@ def _resume_status_from_events(conn: sqlite3.Connection, task_id: str) -> str:
 
 
 def recompute_ready(conn: sqlite3.Connection, failure_limit: int = None) -> int:
-    """Promote ``todo``/``blocked`` tasks whose parents are all done/archived;
+    """Promote ``todo``/``blocked`` tasks whose parents have accepted outcomes;
     returns the count. Opens its own IMMEDIATE txn — call OUTSIDE any write txn.
 
     ``blocked`` is skipped when sticky (explicit ``kanban_block``) or when
@@ -2140,12 +2149,7 @@ def recompute_ready(conn: sqlite3.Connection, failure_limit: int = None) -> int:
             if cur_status == "blocked" and _has_sticky_block(conn, task_id):
                 # Explicit human-intervention block; only ``unblock_task`` may exit it.
                 continue
-            parents = conn.execute(
-                "SELECT t.status FROM tasks t "
-                "JOIN task_links l ON l.parent_id = t.id "
-                "WHERE l.child_id = ?", (task_id,),
-            ).fetchall()
-            if all(p["status"] in ("done", "archived") for p in parents):
+            if _parents_satisfied(conn, task_id):
                 resume_status = _resume_status_from_events(conn, task_id)
                 if cur_status == "blocked":
                     # At the breaker limit, no auto-recovery (else block ->
@@ -2178,16 +2182,27 @@ def recompute_ready(conn: sqlite3.Connection, failure_limit: int = None) -> int:
 
 # --- Claim / complete / block ---
 
-def _parents_satisfied(conn: sqlite3.Connection, task_id: str) -> bool:
-    """Return whether every direct parent is terminal for dependency gating."""
+def _unsatisfied_parents(conn: sqlite3.Connection, task_id: str) -> list[sqlite3.Row]:
+    """Return direct parents that have not produced an accepted outcome.
+
+    Archiving is queue hygiene, not acceptance. A completed review that reports
+    ``block`` or ``changes_required`` is also deliberately non-satisfying.
+    ``NULL`` is treated as ``completed`` for databases created before typed
+    completion outcomes existed.
+    """
     return conn.execute(
-        # Check if this task has children that still need the workspace. If any child is not yet
-        # done/archived, defer cleanup so the child can read handoff artifacts from the workspace (#33774).
-        "SELECT 1 FROM task_links l "
+        "SELECT p.id, p.title, p.status, p.completion_outcome FROM task_links l "
         "JOIN tasks p ON p.id = l.parent_id "
-        "WHERE l.child_id = ? "
-        "AND p.status NOT IN ('done', 'archived') LIMIT 1", (task_id,),
-    ).fetchone() is None
+        "WHERE l.child_id = ? AND NOT ("
+        "p.status = 'done' AND COALESCE(p.completion_outcome, 'completed') IN ('completed', 'pass')"
+        ") ORDER BY p.id",
+        (task_id,),
+    ).fetchall()
+
+
+def _parents_satisfied(conn: sqlite3.Connection, task_id: str) -> bool:
+    """Return whether every direct parent has an accepted completion outcome."""
+    return not _unsatisfied_parents(conn, task_id)
 
 
 def _claim_and_open_run(
@@ -2640,7 +2655,7 @@ def complete_task(
     conn: sqlite3.Connection, task_id: str, *, result: Optional[str] = None,
     summary: Optional[str] = None, metadata: Optional[dict] = None,
     created_cards: Optional[Iterable[str]] = None, expected_run_id: Optional[int] = None,
-    fire_lifecycle_hook: bool = True,
+    fire_lifecycle_hook: bool = True, completion_outcome: Optional[str] = None,
 ) -> bool:
     """``running|ready|blocked|review -> done``; records ``result``.
 
@@ -2653,6 +2668,10 @@ def complete_task(
     prose is scanned for unresolvable ``t_<hex>`` refs (advisory event only).
     """
     now = int(time.time())
+    prior_status = _task_status(conn, task_id)
+    completion_outcome = _normalize_completion_outcome(
+        completion_outcome, summary=summary, result=result, prior_status=prior_status,
+    )
     # Cheap pre-check; re-checked inside the txn to close the parent-reopen race.
     if not _parents_satisfied(conn, task_id):
         return False
@@ -2682,11 +2701,12 @@ def complete_task(
                        claim_expires= NULL,
                        worker_pid   = NULL,
                        block_kind   = NULL,
-                       block_recurrences = 0
+                       block_recurrences = 0,
+                       completion_outcome = ?
                  WHERE id = ?
                    AND status IN ('running', 'ready', 'blocked', 'review')
                 """
-        params: tuple = (result, now, task_id)
+        params: tuple = (result, now, completion_outcome, task_id)
         if expected_run_id is not None:
             sql += " AND current_run_id = ?"
             params = (*params, int(expected_run_id))
@@ -2712,7 +2732,10 @@ def complete_task(
             event_summary = _REVIEW_APPROVED_NOTE
         _append_event(
             conn, task_id, "completed",
-            _completed_event_payload(result, event_summary, verified_cards, metadata),
+            {
+                **_completed_event_payload(result, event_summary, verified_cards, metadata),
+                "completion_outcome": completion_outcome,
+            },
             run_id=run_id,
         )
     _flag_phantom_prose_refs(conn, task_id, run_id, summary, result, verified_cards)
@@ -2727,6 +2750,31 @@ def complete_task(
 
 
 _REVIEW_APPROVED_NOTE = "Review approved without additional evidence."
+
+
+_NEGATIVE_COMPLETION_PREFIXES = (
+    ("changes_required", ("CHANGES_REQUIRED", "CHANGES REQUIRED")),
+    ("block", ("BLOCK", "BLOCKED", "REJECTED", "FAIL", "FAILED")),
+)
+
+
+def _normalize_completion_outcome(
+    value: Optional[str], *, summary: Optional[str], result: Optional[str], prior_status: Optional[str],
+) -> str:
+    """Validate an explicit outcome or conservatively classify legacy prose."""
+    if value is not None:
+        normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized not in VALID_COMPLETION_OUTCOMES:
+            raise ValueError(
+                f"completion_outcome must be one of {sorted(VALID_COMPLETION_OUTCOMES)}"
+            )
+        return normalized
+    first_line = _first_line(summary if summary is not None else result, 200).strip().upper()
+    for outcome, prefixes in _NEGATIVE_COMPLETION_PREFIXES:
+        for prefix in prefixes:
+            if first_line == prefix or first_line.startswith(prefix + ":") or first_line.startswith(prefix + " —"):
+                return outcome
+    return "pass" if prior_status == "review" else "completed"
 
 
 def _gate_created_cards(
@@ -3029,10 +3077,27 @@ def block_task(
         if cur_row is None:
             return False
         source_status = _retry_status_for_run(conn, task_id) if cur_row["status"] == "running" else "ready"
+        invalid_dependency_wait = kind == "dependency" and not _unsatisfied_parents(conn, task_id)
+        routed_kind = None if invalid_dependency_wait else kind
         new_status, event_kind, set_sql, params, payload = _route_block(
-            kind, reason, source_status, prev_kind=_row_get(cur_row, "block_kind"),
+            routed_kind, reason, source_status, prev_kind=_row_get(cur_row, "block_kind"),
             prev_recurrences=int(_row_get(cur_row, "block_recurrences") or 0),
         )
+        if invalid_dependency_wait:
+            # A dependency wait with no unsatisfied parent used to land in todo,
+            # immediately promote, and respawn forever. Preserve the requested
+            # kind for diagnosis but route it to the sticky human lane.
+            set_sql = "block_kind    = ?,\n                       block_recurrences = ?"
+            recurrences = int(_row_get(cur_row, "block_recurrences") or 0) + 1
+            params = ("dependency", recurrences)
+            new_status, event_kind = "blocked", "invalid_dependency_block"
+            payload = {
+                "reason": reason,
+                "kind": "dependency",
+                "source_status": source_status,
+                "invalid_dependency_wait": True,
+                "action": "add_an_unsatisfied_parent_or_choose_the_actual_block_kind",
+            }
         sql = f"""
                 UPDATE tasks
                    SET status        = '{new_status}',
@@ -3309,7 +3374,7 @@ def promote_task(
             "JOIN task_links l ON l.parent_id = t.id "
             "WHERE l.child_id = ?", (task_id,),
         ).fetchall()
-        unsatisfied = [p["id"] for p in parents if p["status"] not in ("done", "archived")]
+        unsatisfied = [p["id"] for p in _unsatisfied_parents(conn, task_id)]
         if unsatisfied:
             return False, (
                 f"unsatisfied parent dependencies: "
@@ -3610,7 +3675,9 @@ def archive_task(conn: sqlite3.Connection, task_id: str) -> bool:
             summary="task archived with run still active",
         )
         _append_event(conn, task_id, "archived", None, run_id=run_id)
-    # ``archived`` parents no longer block children; promote them now.
+    # Archiving is not acceptance. Recompute can still promote unrelated tasks,
+    # but children of this task remain gated until rewired or the parent is
+    # explicitly completed with an accepted outcome.
     recompute_ready(conn)
     # Reap the workspace on archive too (never-completed tasks kept it forever).
     _cleanup_workspace(conn, task_id)

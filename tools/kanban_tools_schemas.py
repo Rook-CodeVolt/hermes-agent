@@ -123,6 +123,16 @@ KANBAN_COMPLETE_SCHEMA = _schema(
                 "possible; this exists for compatibility with "
                 "callers that still set --result on the CLI."
         )),
+        "outcome": {
+            "type": "string",
+            "enum": ["completed", "pass", "block", "changes_required"],
+            "description": (
+                "Semantic verdict. Only completed/pass release dependent tasks. "
+                "Use block or changes_required when the activity finished but its "
+                "result was not accepted. If omitted, exact BLOCK/CHANGES_REQUIRED "
+                "summary prefixes are classified conservatively."
+            ),
+        },
         "created_cards": {
             "type": "array",
             "items": {"type": "string"},

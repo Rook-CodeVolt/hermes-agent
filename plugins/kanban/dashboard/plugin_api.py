@@ -658,11 +658,7 @@ def _parents_blocking_ready(conn: sqlite3.Connection, task_id: str) -> list:
     (#26744) instead of a silent no-op. Returns ``[]`` when nothing blocks the transition (e.g. no parents,
     or all parents already done).
     """
-    rows = conn.execute(
-        "SELECT t.id, t.title, t.status FROM tasks t "
-        "JOIN task_links l ON l.parent_id = t.id "
-        "WHERE l.child_id = ? AND t.status != 'done'",
-        (task_id,)).fetchall()
+    rows = kanban_db._unsatisfied_parents(conn, task_id)
     return [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in rows]
 
 
@@ -681,12 +677,12 @@ def _set_status_direct(conn: sqlite3.Connection, task_id: str, new_status: str) 
             resume_status = kanban_db._retry_status_for_run(conn, task_id, prev["current_run_id"])
             if resume_status == "review":
                 effective_status = "review" if kanban_db._parents_satisfied(conn, task_id) else "todo"
-        # Never promote to 'ready' unless all parents are done/archived — otherwise the
+        # Never promote to 'ready' unless all parents have accepted outcomes — otherwise the
         # dispatcher spawns a child whose upstream work hasn't completed.
         if effective_status == "ready" and not kanban_db._parents_satisfied(conn, task_id):
             return False
         was_running = prev["status"] == "running"
-        reopening_satisfied_parent = prev["status"] in {"done", "archived"} and effective_status not in {"done", "archived"}
+        reopening_satisfied_parent = prev["status"] == "done" and effective_status != "done"
         cur = conn.execute(
             "UPDATE tasks SET status = ?, "
             "  claim_lock = CASE WHEN ? = 'running' THEN claim_lock ELSE NULL END, "

@@ -134,7 +134,7 @@ def test_replacement_lifecycle_is_respected(
 
         kb.supersede_task(conn, old, replacement, actor="rook")
 
-        expected = "ready" if replacement_status in {"done", "archived"} else "todo"
+        expected = "ready" if replacement_status == "done" else "todo"
         assert kb.get_task(conn, child).status == expected
         assert kb.parent_ids(conn, child) == [replacement]
 
