@@ -100,6 +100,31 @@ def test_real_dependency_wait_releases_only_after_accepted_parent(kanban_home: P
         assert kb.get_task(conn, child).status == "ready"
 
 
+def test_transitive_rejected_ancestor_cannot_be_masked_by_legacy_done_child(
+    kanban_home: Path,
+) -> None:
+    with kbc.connect_closing() as conn:
+        rejected = kb.create_task(conn, title="rejected review", assignee="maya")
+        assert kb.complete_task(
+            conn, rejected, summary="BLOCK: defect remains", completion_outcome="block"
+        )
+        legacy_child = kb.create_task(
+            conn, title="historically misreleased child", parents=(rejected,)
+        )
+        with kb.write_txn(conn):
+            conn.execute(
+                "UPDATE tasks SET status='done', completion_outcome='completed' WHERE id=?",
+                (legacy_child,),
+            )
+
+        grandchild = kb.create_task(conn, title="must see rejected ancestry", parents=(legacy_child,))
+
+        assert kb.get_task(conn, grandchild).status == "todo"
+        blockers = {row["id"] for row in kb._unsatisfied_ancestors(conn, grandchild)}
+        assert rejected in blockers
+        assert kb.recompute_ready(conn) == 0
+
+
 def test_completed_event_records_typed_outcome(kanban_home: Path) -> None:
     with kbc.connect_closing() as conn:
         task_id = kb.create_task(conn, title="review", assignee="maya")

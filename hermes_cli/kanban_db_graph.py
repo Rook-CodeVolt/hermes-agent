@@ -31,6 +31,8 @@ def initial_task_state(
     Parent order breaks ties in this soft namespace; explicit tenant wins.
     Validate parents even for parked tasks so links never dangle.
     """
+    from hermes_cli.kanban_db import _unsatisfied_ancestors
+
     rows = {}
     if parents:
         rows = {row["id"]: row for row in conn.execute(
@@ -49,6 +51,7 @@ def initial_task_state(
     if any(
         row["status"] != "done"
         or (row["completion_outcome"] or "completed") not in {"completed", "pass"}
+        or bool(_unsatisfied_ancestors(conn, row["id"]))
         for row in rows.values()
     ):
         return "todo", tenant

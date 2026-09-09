@@ -2200,9 +2200,42 @@ def _unsatisfied_parents(conn: sqlite3.Connection, task_id: str) -> list[sqlite3
     ).fetchall()
 
 
+def _unsatisfied_ancestors(conn: sqlite3.Connection, task_id: str) -> list[sqlite3.Row]:
+    """Return every ancestor without an accepted completion outcome.
+
+    Direct-only gating is insufficient for historical graphs: an older child
+    may have been marked successful after a review parent encoded ``BLOCK`` in
+    prose.  That incorrectly accepted child must not mask the rejected ancestor
+    and release another generation after the typed-outcome migration.
+    """
+    return conn.execute(
+        """
+        WITH RECURSIVE ancestors(id, title, status, completion_outcome) AS (
+            SELECT p.id, p.title, p.status, p.completion_outcome
+              FROM task_links l
+              JOIN tasks p ON p.id = l.parent_id
+             WHERE l.child_id = ?
+            UNION
+            SELECT p.id, p.title, p.status, p.completion_outcome
+              FROM ancestors a
+              JOIN task_links l ON l.child_id = a.id
+              JOIN tasks p ON p.id = l.parent_id
+        )
+        SELECT id, title, status, completion_outcome
+          FROM ancestors
+         WHERE NOT (
+            status = 'done'
+            AND COALESCE(completion_outcome, 'completed') IN ('completed', 'pass')
+         )
+         ORDER BY id
+        """,
+        (task_id,),
+    ).fetchall()
+
+
 def _parents_satisfied(conn: sqlite3.Connection, task_id: str) -> bool:
-    """Return whether every direct parent has an accepted completion outcome."""
-    return not _unsatisfied_parents(conn, task_id)
+    """Return whether every direct and transitive parent is accepted."""
+    return not _unsatisfied_ancestors(conn, task_id)
 
 
 def _claim_and_open_run(
@@ -3077,7 +3110,7 @@ def block_task(
         if cur_row is None:
             return False
         source_status = _retry_status_for_run(conn, task_id) if cur_row["status"] == "running" else "ready"
-        invalid_dependency_wait = kind == "dependency" and not _unsatisfied_parents(conn, task_id)
+        invalid_dependency_wait = kind == "dependency" and not _unsatisfied_ancestors(conn, task_id)
         routed_kind = None if invalid_dependency_wait else kind
         new_status, event_kind, set_sql, params, payload = _route_block(
             routed_kind, reason, source_status, prev_kind=_row_get(cur_row, "block_kind"),
@@ -3374,7 +3407,7 @@ def promote_task(
             "JOIN task_links l ON l.parent_id = t.id "
             "WHERE l.child_id = ?", (task_id,),
         ).fetchall()
-        unsatisfied = [p["id"] for p in _unsatisfied_parents(conn, task_id)]
+        unsatisfied = [p["id"] for p in _unsatisfied_ancestors(conn, task_id)]
         if unsatisfied:
             return False, (
                 f"unsatisfied parent dependencies: "

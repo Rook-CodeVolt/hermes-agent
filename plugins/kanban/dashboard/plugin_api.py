@@ -658,7 +658,7 @@ def _parents_blocking_ready(conn: sqlite3.Connection, task_id: str) -> list:
     (#26744) instead of a silent no-op. Returns ``[]`` when nothing blocks the transition (e.g. no parents,
     or all parents already done).
     """
-    rows = kanban_db._unsatisfied_parents(conn, task_id)
+    rows = kanban_db._unsatisfied_ancestors(conn, task_id)
     return [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in rows]
 
 
