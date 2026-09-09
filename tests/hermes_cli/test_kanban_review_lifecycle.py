@@ -486,6 +486,11 @@ def test_review_dispatch_preserves_task_skills_and_adds_reviewer_skill(
 
     monkeypatch.setattr(profmod, "profile_exists", lambda name: True)
     monkeypatch.setattr(
+        kbd,
+        "_missing_worker_forced_skills",
+        lambda _assignee, requested: (list(requested or []), []),
+    )
+    monkeypatch.setattr(
         cfgmod,
         "load_config",
         lambda *args, **kwargs: {"kanban": {"review_dispatch": True}},

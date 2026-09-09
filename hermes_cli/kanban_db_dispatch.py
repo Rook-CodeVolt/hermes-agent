@@ -8,6 +8,7 @@ late-bound via ``_kb`` (import-cycle breaking) so monkeypatching
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import signal
@@ -114,6 +115,9 @@ class DispatchResult:
     """Task ids reclaimed because their worker PID disappeared."""
     auto_blocked: list[str] = field(default_factory=list)
     """Task ids auto-blocked by the spawn-failure circuit breaker."""
+    capability_blocked: list[tuple[str, str, list[str]]] = field(default_factory=list)
+    """Tasks blocked before spawn because forced skills cannot run in the
+    assignee profile: ``(task_id, assignee, missing_or_disabled_skills)``."""
     timed_out: list[str] = field(default_factory=list)
     """Task ids whose workers exceeded ``max_runtime_seconds``."""
     stale: list[str] = field(default_factory=list)
@@ -1536,6 +1540,24 @@ def _dispatch_lane_task(
             with _kb.write_txn(conn):
                 _kb._append_event(conn, task_id, "respawn_guarded", {"reason": guard_reason})
         return False
+    # Task-pinned skills are part of its execution contract. Check them after
+    # cheap respawn/cooldown guards, but always before claim and worker spawn.
+    task = _kb.get_task(conn, task_id)
+    requested_skills, unavailable_skills = _missing_worker_forced_skills(
+        assignee, list(task.skills or []) if task is not None else [],
+    )
+    if unavailable_skills:
+        result.capability_blocked.append((task_id, assignee, unavailable_skills))
+        if not dry_run:
+            _kb.block_task(
+                conn,
+                task_id,
+                reason=_forced_skill_capability_reason(
+                    assignee, requested_skills, unavailable_skills,
+                ),
+                kind="capability",
+            )
+        return False
 
     def _count_spawn(name: str) -> None:
         # Later rows in this tick respect the per-profile cap; subsequent
@@ -1622,6 +1644,87 @@ def _apply_default_assignee(
         )
         return False
     return True
+
+
+def _missing_worker_forced_skills(
+    assignee: str,
+    requested_skills: Optional[list],
+) -> tuple[list[str], list[str]]:
+    """Resolve forced skills in the assignee's exact profile, failing closed.
+
+    A skill whose normalized name is explicitly disabled as a toolset is also
+    unavailable. This catches contradictory cards such as forcing
+    ``computer-use`` onto a profile with ``computer_use`` disabled before a
+    worker is claimed or a browser daemon is spawned.
+    """
+    requested = list(dict.fromkeys(
+        str(skill).strip() for skill in (requested_skills or []) if str(skill).strip()
+    ))
+    if not requested:
+        return [], []
+
+    token = None
+    reset_override = None
+    try:
+        from agent.skill_commands import _load_skill_payload
+        from agent.skill_utils import get_disabled_skill_names, parse_config_string_list
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        from hermes_cli.config import load_config
+        from hermes_cli.profiles import resolve_profile_env
+
+        reset_override = reset_hermes_home_override
+        token = set_hermes_home_override(resolve_profile_env(assignee))
+        disabled_skills = set(get_disabled_skill_names())
+        cfg = load_config()
+        disabled_toolsets = {
+            str(name).strip().lower().replace("-", "_")
+            for name in parse_config_string_list((cfg.get("agent") or {}).get("disabled_toolsets"))
+            if str(name).strip()
+        }
+        unavailable: list[str] = []
+        for identifier in requested:
+            loaded = _load_skill_payload(identifier)
+            if loaded is None:
+                unavailable.append(identifier)
+                continue
+            _payload, _skill_dir, resolved_name = loaded
+            normalized = identifier.lower().replace("-", "_")
+            if (
+                identifier in disabled_skills
+                or resolved_name in disabled_skills
+                or normalized in disabled_toolsets
+            ):
+                unavailable.append(identifier)
+        return requested, unavailable
+    except Exception:
+        _kb._log.warning(
+            "kanban dispatch: forced-skill capability preflight failed for assignee %r",
+            assignee,
+            exc_info=True,
+        )
+        return requested, list(requested)
+    finally:
+        if token is not None and reset_override is not None:
+            reset_override(token)
+
+
+def _forced_skill_capability_reason(
+    assignee: str,
+    requested: list[str],
+    unavailable: list[str],
+) -> str:
+    """Return a stable, machine-actionable capability failure."""
+    return json.dumps(
+        {
+            "action": "enable_or_install_skills_or_reassign_task",
+            "assignee": assignee,
+            "code": "kanban_forced_skill_unavailable",
+            "missing_or_disabled_skills": unavailable,
+            "requested_skills": requested,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _run_reclaim_phase(
