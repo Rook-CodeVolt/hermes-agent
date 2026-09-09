@@ -29,7 +29,9 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("BU_NAME", raising=False)
     monkeypatch.delenv("BU_AUTOSPAWN", raising=False)
     monkeypatch.delenv("BROWSER_USE_API_KEY", raising=False)
+    bu_cli._HARNESS_DAEMONS_BY_TASK.clear()
     yield
+    bu_cli._HARNESS_DAEMONS_BY_TASK.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -922,6 +924,39 @@ class TestBrowserExec:
         monkeypatch.setattr(bu_cli, "_MIN_TIMEOUT_S", 1)
         result = json.loads(bu_cli.browser_exec("print(1)", timeout_s=1))
         assert "timed out" in result["error"]
+
+
+class TestHarnessDaemonLifecycle:
+    def test_task_scopes_default_daemon_and_tracks_owner(self, tmp_path, monkeypatch):
+        cli = _fake_cli(tmp_path, 'cat > /dev/null\necho "bu:$BU_NAME"\n')
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+
+        result = json.loads(bu_cli.browser_exec("print(1)", task_id="task-A"))
+
+        expected = bu_cli._effective_harness_session("task-A", "")
+        assert result["success"] is True
+        assert f"bu:{expected}" in result["output"]
+        assert bu_cli._HARNESS_DAEMONS_BY_TASK["task-A"] == {expected}
+        assert len(expected) <= 64
+
+    def test_same_requested_name_is_isolated_between_tasks(self):
+        first = bu_cli._effective_harness_session("task-A", "research")
+        second = bu_cli._effective_harness_session("task-B", "research")
+        assert first != second
+        assert first == bu_cli._effective_harness_session("task-A", "research")
+
+    def test_task_cleanup_stops_each_owned_daemon_once(self, monkeypatch):
+        bu_cli._track_harness_daemon("task-A", "h_one")
+        bu_cli._track_harness_daemon("task-A", "h_two")
+        bu_cli._track_harness_daemon("task-B", "h_other")
+        calls = []
+        monkeypatch.setattr(bu_cli, "_stop_harness_daemon", calls.append)
+
+        bu_cli.cleanup_browser_use_daemons("task-A")
+        bu_cli.cleanup_browser_use_daemons("task-A")
+
+        assert calls == ["h_one", "h_two"]
+        assert bu_cli._HARNESS_DAEMONS_BY_TASK == {"task-B": {"h_other"}}
 
 
 class TestFindCliManagedBin:

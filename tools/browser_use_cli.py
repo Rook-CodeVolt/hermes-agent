@@ -4,7 +4,9 @@ When browser.backend is "browser-use", the model gets ``browser_exec`` tool
 instead of default browser tools
 """
 
+import atexit
 import contextlib
+import hashlib
 import importlib
 import json
 import logging
@@ -12,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -74,6 +77,8 @@ _DEFAULT_TIMEOUT_S = 300
 _MIN_TIMEOUT_S = 5
 _MAX_TIMEOUT_S = 1800
 _STDERR_CAP_CHARS = 4000
+_HARNESS_DAEMON_LOCK = threading.RLock()
+_HARNESS_DAEMONS_BY_TASK: dict[str, set[str]] = {}
 
 _TASK_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")  # filesystem-safe task ids
 # Screenshot paths printed by capture_screenshot(): POSIX or Windows drive-letter absolute.
@@ -516,6 +521,70 @@ def _clamp_timeout(timeout_s: Any) -> int:
         return _DEFAULT_TIMEOUT_S
 
 
+def _effective_harness_session(task_id: Optional[str], requested: str) -> str:
+    """Return a task-scoped daemon name, preserving legacy direct-call names.
+
+    Browser Harness daemons detach from the short-lived CLI process. A global
+    ``default`` daemon therefore leaked across unrelated Hermes tasks and could
+    survive after the owning agent closed. Tool calls carry a task id;
+    namespace both default and model-named sessions by it so ownership and
+    cleanup are deterministic. Direct library callers without a task id retain
+    the upstream Browser Use naming contract.
+    """
+    if not task_id:
+        return requested or "default"
+    owner = str(task_id)
+    digest = hashlib.sha256(owner.encode("utf-8", "replace")).hexdigest()[:12]
+    label = re.sub(r"[^A-Za-z0-9_-]+", "_", requested or "default").strip("_") or "default"
+    return f"h_{digest}_{label[:40]}"[:64]
+
+
+def _track_harness_daemon(task_id: Optional[str], daemon_name: str) -> None:
+    owner = str(task_id or "__process__")
+    with _HARNESS_DAEMON_LOCK:
+        _HARNESS_DAEMONS_BY_TASK.setdefault(owner, set()).add(daemon_name)
+
+
+def _stop_harness_daemon(daemon_name: str) -> None:
+    """Ask Browser Use to stop one identity-verified daemon; best effort."""
+    cmd = _find_cli()
+    if not cmd:
+        return
+    env = _base_subprocess_env()
+    env["BU_NAME"] = daemon_name
+    try:
+        proc = subprocess.run(
+            [*cmd, "--reload"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=env,
+            **_windows_popen_kwargs(),
+        )
+        if proc.returncode != 0:
+            logger.warning("Browser Use daemon cleanup failed for %s (exit %s)", daemon_name, proc.returncode)
+    except Exception as exc:
+        logger.debug("Browser Use daemon cleanup failed for %s: %s", daemon_name, exc)
+
+
+def cleanup_browser_use_daemons(task_id: str) -> None:
+    """Stop every Browser Harness daemon owned by one hard-closing agent."""
+    owner = str(task_id or "__process__")
+    with _HARNESS_DAEMON_LOCK:
+        names = sorted(_HARNESS_DAEMONS_BY_TASK.pop(owner, set()))
+    for daemon_name in names:
+        _stop_harness_daemon(daemon_name)
+
+
+def cleanup_all_browser_use_daemons() -> None:
+    """Normal-process-exit backstop for daemons not reached by agent close."""
+    with _HARNESS_DAEMON_LOCK:
+        names = sorted({name for owned in _HARNESS_DAEMONS_BY_TASK.values() for name in owned})
+        _HARNESS_DAEMONS_BY_TASK.clear()
+    for daemon_name in names:
+        _stop_harness_daemon(daemon_name)
+
+
 def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT_S,
                  task_id: Optional[str] = None, local: bool = False):
     """Run Python code through the browser-use CLI, and return its output"""
@@ -538,15 +607,17 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         if not _SESSION_RE.match(session):
             return tool_error(f"Invalid session name {session!r}: use 1-64 letters, digits, "
                               "dashes, or underscores (e.g. 'r7k2').")
-        env["BU_NAME"] = session
-    route_err = _route_backend(env, session, task_id, bool(local))
+    harness_session = _effective_harness_session(task_id, session)
+    env["BU_NAME"] = harness_session
+    route_session = harness_session if task_id else session
+    route_err = _route_backend(env, route_session, task_id, bool(local))
     if route_err:
         return tool_error(route_err)
 
     # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see
     # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
-    if session and not private_browser:
+    if route_session and not private_browser:
         code = _OWN_TAB_PREAMBLE + code
 
     workspace = _workspace_dir(task_id)
@@ -557,6 +628,8 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     # Chrome/CDP endpoint is reachable (their API key authenticates it)
     if "BU_AUTOSPAWN" not in env and is_legacy_browser_use_cloud_config(_read_browser_cfg()):
         env["BU_AUTOSPAWN"] = "1"
+
+    _track_harness_daemon(task_id, harness_session)
 
     timeout = _clamp_timeout(timeout_s)
     started = time.time()
@@ -589,6 +662,9 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         if native is not None:
             return native
     return tool_result(result)
+
+
+atexit.register(cleanup_all_browser_use_daemons)
 
 
 _HEADER_BASE = (
