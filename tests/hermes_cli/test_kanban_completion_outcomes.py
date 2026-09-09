@@ -106,3 +106,35 @@ def test_completed_event_records_typed_outcome(kanban_home: Path) -> None:
         assert kb.complete_task(conn, task_id, summary="Rejected", completion_outcome="block")
         completed = [e for e in kb.list_events(conn, task_id) if e.kind == "completed"][-1]
         assert completed.payload["completion_outcome"] == "block"
+
+
+def test_schema_migration_types_legacy_negative_prose_before_dependency_release(
+    kanban_home: Path,
+) -> None:
+    with kbc.connect_closing() as conn:
+        rejected = kb.create_task(conn, title="legacy rejected review", assignee="maya")
+        accepted = kb.create_task(conn, title="legacy accepted work", assignee="daniel")
+        ordinary = kb.create_task(conn, title="not a false positive", assignee="daniel")
+        child = kb.create_task(conn, title="must remain gated", parents=(rejected,))
+        with kb.write_txn(conn):
+            conn.execute(
+                "UPDATE tasks SET status='done', completion_outcome=NULL, result=? WHERE id=?",
+                ("BLOCK: privacy defects remain", rejected),
+            )
+            conn.execute(
+                "UPDATE tasks SET status='done', completion_outcome=NULL, result=? WHERE id=?",
+                ("Delivered and verified", accepted),
+            )
+            conn.execute(
+                "UPDATE tasks SET status='done', completion_outcome=NULL, result=? WHERE id=?",
+                ("Failures were investigated and resolved", ordinary),
+            )
+
+    kbc.init_db()
+
+    with kbc.connect_closing() as conn:
+        assert kb.get_task(conn, rejected).completion_outcome == "block"
+        assert kb.get_task(conn, accepted).completion_outcome == "completed"
+        assert kb.get_task(conn, ordinary).completion_outcome == "completed"
+        assert kb.get_task(conn, child).status == "todo"
+        assert kb.recompute_ready(conn) == 0

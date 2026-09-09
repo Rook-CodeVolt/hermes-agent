@@ -906,6 +906,8 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
     if _table_exists(conn, "task_runs"):
         _backfill_legacy_inflight_runs(conn)
 
+    _migrate_legacy_completion_outcomes(conn)
+
     # One-shot event-kind rename: old names still worked but were awkward on
     # the wire. Fires once per DB — after the UPDATE no rows match.
     for old, new in (
@@ -916,6 +918,62 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE task_events SET kind = ? WHERE kind = ?", (new, old))
 
     _rebuild_drifted_tables(conn)
+
+
+def _migrate_legacy_completion_outcomes(conn: sqlite3.Connection) -> None:
+    """Give historical ``done`` rows an explicit semantic outcome.
+
+    Older workers encoded review rejection in free-form summary/result prose
+    and then marked the card ``done``.  Leaving those rows NULL would retain
+    the legacy "done means accepted" dependency behaviour, recreating the
+    release bug as soon as the new parent gate is installed.  The shared
+    classifier is intentionally conservative: only an exact negative token or
+    that token followed by ``:`` / an em dash is treated as rejection.
+
+    This is safe to run on every schema init.  Current completion paths always
+    write a typed value, and the UPDATE only considers NULL historical rows.
+    """
+    if "completion_outcome" not in _column_names(conn, "tasks"):
+        return
+
+    if _table_exists(conn, "task_runs"):
+        rows = conn.execute(
+            """
+            SELECT t.id, t.result,
+                   (SELECT r.summary
+                      FROM task_runs r
+                     WHERE r.task_id = t.id AND r.summary IS NOT NULL
+                     ORDER BY r.started_at DESC, r.id DESC
+                     LIMIT 1) AS latest_summary
+              FROM tasks t
+             WHERE t.status = 'done' AND t.completion_outcome IS NULL
+            """
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, result, NULL AS latest_summary FROM tasks "
+            "WHERE status = 'done' AND completion_outcome IS NULL"
+        ).fetchall()
+
+    if not rows:
+        return
+
+    counts: dict[str, int] = {}
+    with write_txn(conn):
+        for row in rows:
+            outcome = _kb._normalize_completion_outcome(
+                None,
+                summary=row["latest_summary"],
+                result=row["result"],
+                prior_status=None,
+            )
+            conn.execute(
+                "UPDATE tasks SET completion_outcome = ? "
+                "WHERE id = ? AND status = 'done' AND completion_outcome IS NULL",
+                (outcome, row["id"]),
+            )
+            counts[outcome] = counts.get(outcome, 0) + 1
+    _kb._log.info("kanban migration: typed legacy completion outcomes %s", counts)
 
 
 def _backfill_legacy_inflight_runs(conn: sqlite3.Connection) -> None:
