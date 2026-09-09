@@ -241,16 +241,24 @@ def test_cli_pause_engages_with_reason(hermes_home, capsys):
 def test_cli_pause_idempotent(hermes_home, capsys):
     from hermes_cli.subcommands.pause import cmd_pause
 
-    assert cmd_pause(argparse.Namespace(reason=None)) == 0
-    assert cmd_pause(argparse.Namespace(reason=None)) == 0
+    assert cmd_pause(argparse.Namespace(reason="maintenance")) == 0
+    assert cmd_pause(argparse.Namespace(reason="maintenance")) == 0
     assert estop.is_engaged() is True
+
+
+def test_cli_pause_refuses_missing_reason(hermes_home, capsys):
+    from hermes_cli.subcommands.pause import cmd_pause
+
+    assert cmd_pause(argparse.Namespace(reason="")) == 2
+    assert estop.is_engaged() is False
+    assert "unaudited" in capsys.readouterr().out.lower()
 
 
 def test_cli_resume_disengages(hermes_home, capsys):
     from hermes_cli.subcommands.pause import cmd_pause, cmd_resume
 
-    cmd_pause(argparse.Namespace(reason=None))
-    rc = cmd_resume(argparse.Namespace())
+    cmd_pause(argparse.Namespace(reason="maintenance"))
+    rc = cmd_resume(argparse.Namespace(reason="checks passed", confirm_readiness=True))
     assert rc == 0
     assert estop.is_engaged() is False
     assert "resumed" in capsys.readouterr().out.lower()
@@ -259,9 +267,32 @@ def test_cli_resume_disengages(hermes_home, capsys):
 def test_cli_resume_when_not_paused(hermes_home, capsys):
     from hermes_cli.subcommands.pause import cmd_resume
 
-    rc = cmd_resume(argparse.Namespace())
+    rc = cmd_resume(argparse.Namespace(reason="checks passed", confirm_readiness=True))
     assert rc == 0
     assert "not paused" in capsys.readouterr().out.lower()
+
+
+def test_cli_resume_requires_reason_and_readiness_confirmation(hermes_home, capsys):
+    from hermes_cli.subcommands.pause import cmd_pause, cmd_resume
+
+    assert cmd_pause(argparse.Namespace(reason="incident")) == 0
+    assert cmd_resume(argparse.Namespace(reason="", confirm_readiness=True)) == 2
+    assert cmd_resume(argparse.Namespace(reason="checks passed", confirm_readiness=False)) == 2
+    assert estop.is_engaged() is True
+
+
+def test_estop_history_survives_resume(hermes_home):
+    estop.engage("incident", engaged_by="rook")
+    assert estop.disengage(reason="verified recovery", resumed_by="operator")
+
+    records = [
+        json.loads(line)
+        for line in (hermes_home / "ESTOP_HISTORY.jsonl").read_text().splitlines()
+    ]
+    assert [record["action"] for record in records] == ["engaged", "resumed"]
+    assert records[0]["engaged_by"] == "rook"
+    assert records[1]["resumed_by"] == "operator"
+    assert records[1]["reason"] == "verified recovery"
 
 
 def test_builtin_subcommands_include_pause_resume():
@@ -360,11 +391,11 @@ async def test_gateway_pause_command_engages_and_resumes(hermes_home):
     reply = await runner._handle_pause_command(_FakePauseEvent(""))
     assert "already paused" in reply.lower()
 
-    reply = await runner._handle_pause_command(_FakePauseEvent("off"))
+    reply = await runner._handle_pause_command(_FakePauseEvent("off readiness checks passed"))
     assert "resumed" in reply.lower()
     assert estop.is_engaged() is False
 
-    reply = await runner._handle_pause_command(_FakePauseEvent("off"))
+    reply = await runner._handle_pause_command(_FakePauseEvent("off readiness checks passed"))
     assert "wasn't paused" in reply.lower()
 
 

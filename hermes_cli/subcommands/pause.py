@@ -14,7 +14,10 @@ def cmd_pause(args: argparse.Namespace) -> int:
     """Engage the global emergency stop."""
     from agent.estop import engage, get_state, is_engaged
 
-    reason = getattr(args, "reason", None)
+    reason = (getattr(args, "reason", None) or "").strip()
+    if not reason:
+        print("Refusing an unaudited pause: provide --reason.")
+        return 2
     already = is_engaged()
     path = engage(reason=reason)
     state = get_state() or {}
@@ -32,7 +35,16 @@ def cmd_resume(args: argparse.Namespace) -> int:
     """Disengage the global emergency stop."""
     from agent.estop import disengage, sentinel_path
 
-    if disengage():
+    reason = (getattr(args, "reason", None) or "").strip()
+    confirmed = bool(getattr(args, "confirm_readiness", False))
+    if not reason or not confirmed:
+        print(
+            "Refusing uncontrolled resume: provide --reason and --confirm-readiness "
+            "after checking database integrity, worker capacity, and ready-lane scope."
+        )
+        return 2
+
+    if disengage(reason=reason):
         print("▶️  Hermes resumed — dispatch picks up on the next tick.")
     else:
         print(f"Hermes is not paused (no sentinel at {sentinel_path()}).")
@@ -47,10 +59,15 @@ def build_pause_parser(subparsers) -> None:
             "dispatch, kanban dispatch, and new gateway turns — until "
             "`hermes resume`. In-flight work is never killed.")
     pause_parser.add_argument(
-        "--reason", default=None, help="Optional reason stored in the sentinel and shown to users")
+        "--reason", required=True, help="Required incident/recovery reason stored in the sentinel")
     pause_parser.set_defaults(func=cmd_pause)
 
     resume_parser = subparsers.add_parser(
         "resume", help="Lift the emergency stop set by `hermes pause`",
         description="Remove the ESTOP sentinel; dispatch resumes on the next tick.")
+    resume_parser.add_argument("--reason", required=True, help="Required audited reason for lifting the stop")
+    resume_parser.add_argument(
+        "--confirm-readiness", action="store_true",
+        help="Confirm DB integrity, capacity, and ready-lane scope were checked",
+    )
     resume_parser.set_defaults(func=cmd_resume)

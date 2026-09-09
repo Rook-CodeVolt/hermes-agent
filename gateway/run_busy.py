@@ -839,15 +839,20 @@ class GatewayBusySessionMixin:
         lets slash commands through while paused so messaging-only operators are never locked out)."""
         from agent import estop
         args = (event.get_command_args() or "").strip()
-        if args.lower() in {"off", "resume", "stop", "disengage"}:
-            if estop.disengage():
+        action, _, detail = args.partition(" ")
+        if action.lower() in {"off", "resume", "stop", "disengage"}:
+            if not detail.strip():
+                return "Resume refused: use `/pause off <reason>` after completing readiness checks."
+            if estop.disengage(reason=detail.strip()):
                 return "▶️ Resumed — new work is accepted again."
             return "Hermes wasn't paused."
         state = estop.get_state()
         if state is not None and not args:
             suffix = f" (reason: {state.get('reason')})" if state.get("reason") else ""
             return f"⏸️ Hermes is already paused{suffix}. Use `/pause off` to resume."
-        estop.engage(reason=args or None)
+        if not args:
+            return "Pause refused: use `/pause <reason>` so the incident is auditable."
+        estop.engage(reason=args)
         suffix = f" (reason: {args})" if args else ""
         return (
             f"⏸️ Paused{suffix}. New cron/kanban/gateway work is on hold; "

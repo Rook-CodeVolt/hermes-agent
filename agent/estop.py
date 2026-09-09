@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ from typing import Optional
 from agent.file_safety import _hermes_home_path as _hermes_home, _hermes_root_path as _canonical_root
 
 SENTINEL_NAME = "ESTOP"
+AUDIT_NAME = "ESTOP_HISTORY.jsonl"
+_AUDIT_MAX_BYTES = 1024 * 1024
 
 # Per-component "logged already for this engagement" flags: log once per engagement, not per tick.
 _log_lock = threading.Lock()
@@ -61,20 +64,46 @@ def is_engaged() -> bool:
     return saw_stat_error
 
 
-def engage(reason: Optional[str] = None) -> Path:
+def _operator_identity(explicit: Optional[str] = None) -> str:
+    return (explicit or os.environ.get("HERMES_PROFILE") or os.environ.get("USER") or "operator").strip()
+
+
+def _audit(action: str, payload: dict) -> None:
+    """Append a bounded durable pause/resume receipt; ESTOP itself is deleted on resume."""
+    path = _canonical_root() / AUDIT_NAME
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size >= _AUDIT_MAX_BYTES:
+            rotated = path.with_suffix(".jsonl.1")
+            with suppress(OSError):
+                rotated.unlink()
+            path.replace(rotated)
+        record = {"action": action, "at": datetime.now(timezone.utc).isoformat(), **payload}
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError:
+        logging.getLogger(__name__).warning("could not write ESTOP audit receipt", exc_info=True)
+
+
+def engage(reason: Optional[str] = None, *, engaged_by: Optional[str] = None) -> Path:
     """Create the ESTOP sentinel. Idempotent; re-engaging updates the file."""
     path = sentinel_path()
-    payload = {"engaged_at": datetime.now(timezone.utc).isoformat(), "reason": reason or None}
+    payload = {
+        "engaged_at": datetime.now(timezone.utc).isoformat(),
+        "engaged_by": _operator_identity(engaged_by),
+        "reason": reason or None,
+    }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     except OSError:
         with suppress(OSError):  # Best effort: an empty/partial sentinel still pauses (fail safe).
             path.touch(exist_ok=True)
+    _audit("engaged", payload)
     return path
 
 
-def disengage() -> bool:
+def disengage(*, resumed_by: Optional[str] = None, reason: Optional[str] = None) -> bool:
     """Remove every visible sentinel (process-local and fleet-root)."""
     lifted = False
     for path in _candidate_sentinel_paths():
@@ -83,6 +112,8 @@ def disengage() -> bool:
             lifted = True
         except (OSError, AttributeError):
             continue
+    if lifted:
+        _audit("resumed", {"resumed_by": _operator_identity(resumed_by), "reason": reason or None})
     return lifted
 
 
@@ -91,7 +122,7 @@ def get_state() -> Optional[dict]:
     body still reports engaged with both fields None."""
     if not is_engaged():
         return None
-    state = {"reason": None, "engaged_at": None}
+    state = {"reason": None, "engaged_at": None, "engaged_by": None}
     found = False
     for path in _candidate_sentinel_paths():
         try:
@@ -105,7 +136,11 @@ def get_state() -> Optional[dict]:
         with suppress(OSError, ValueError, AttributeError):
             raw = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
-                state = {"reason": raw.get("reason") or None, "engaged_at": raw.get("engaged_at") or None}
+                state = {
+                    "reason": raw.get("reason") or None,
+                    "engaged_at": raw.get("engaged_at") or None,
+                    "engaged_by": raw.get("engaged_by") or None,
+                }
                 break
     return state if found else None
 
