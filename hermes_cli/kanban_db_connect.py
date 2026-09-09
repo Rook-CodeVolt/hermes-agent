@@ -933,10 +933,12 @@ def _migrate_legacy_completion_outcomes(conn: sqlite3.Connection) -> None:
     This is safe to run on every schema init.  Current completion paths always
     write a typed value, and the UPDATE only considers NULL historical rows.
     """
-    if "completion_outcome" not in _column_names(conn, "tasks"):
+    task_cols = _column_names(conn, "tasks")
+    if not {"id", "status", "result", "completion_outcome"}.issubset(task_cols):
         return
 
-    if _table_exists(conn, "task_runs"):
+    run_cols = _column_names(conn, "task_runs") if _table_exists(conn, "task_runs") else set()
+    if {"id", "task_id", "summary", "started_at"}.issubset(run_cols):
         rows = conn.execute(
             """
             SELECT t.id, t.result,
