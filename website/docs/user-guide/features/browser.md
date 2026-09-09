@@ -81,6 +81,19 @@ The mode is a **driver** that composes with your configured browser backend: it 
 
 **Concurrent sessions:** `browser_exec` accepts a `session=<name>` argument that isolates browser work per name on every backend. Each name gets its own harness daemon (its own IPC socket, log, and state) and its own browser (a separate packaged Chromium locally, a separate cloud browser on cloud backends) — so parallel subagents or simultaneous chats no longer clobber a single shared connection. Omitting `session` uses the shared default daemon, which is fine for one-at-a-time browsing.
 
+Hermes namespaces both the default and model-named Browser Harness daemons by
+the owning task. A hard task close stops every daemon registered to that task;
+normal process exit is the backstop. Direct library calls that provide no task
+id retain Browser Use's original session names and persist until their owning
+process exits. This makes cleanup deterministic without breaking callers that
+intentionally manage long-lived sessions.
+
+Each Browser Use CLI call also runs in its own process group. If it exceeds the
+bounded timeout, Hermes kills the entire group (the process tree on Windows),
+including helpers that inherited output pipes, before returning control. This
+prevents a detached harness or Chrome helper from wedging the agent after a
+timeout; workspace files already written remain available for a retry.
+
 To opt out and force the built-in browser tools, use `/browser use off`, or:
 
 ```yaml

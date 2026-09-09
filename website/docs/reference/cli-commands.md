@@ -57,6 +57,7 @@ hermes [global-options] <command> [subcommand/options]
 | `hermes secrets` | Manage external secret sources (currently Bitwarden Secrets Manager) for pulling API keys at process startup instead of from `~/.hermes/.env`. |
 | `hermes migrate` | Diagnose and (optionally) rewrite `config.yaml` to replace references to retired models or deprecated settings (e.g. `migrate xai`). |
 | `hermes status` | Show agent, auth, and platform status. |
+| `hermes pause` / `hermes resume` | Audited global emergency stop for new cron, Kanban, and gateway work. In-flight work is not killed. |
 | `hermes cron` | Inspect and tick the cron scheduler. |
 | `hermes kanban` | Multi-profile collaboration board (tasks, links, dispatcher). |
 | `hermes project` | Manage named, multi-folder workspaces (projects). Anchors desktop session grouping and, when bound to a kanban board, gives tasks a deterministic worktree + branch convention. State is per-profile. |
@@ -100,6 +101,21 @@ hermes [global-options] <command> [subcommand/options]
 | `hermes --version` | Show version information. |
 | `hermes update` | Pull latest code and reinstall dependencies. `--check` previews without installing; `--backup` takes a pre-pull `HERMES_HOME` snapshot. |
 | `hermes uninstall` | Remove Hermes from the system. |
+
+## Global emergency stop
+
+```bash
+hermes pause --reason "unexpected dispatch loop"
+hermes resume --reason "DB and ready lane verified" --confirm-readiness
+```
+
+`pause` writes `$HERMES_HOME/ESTOP`. Cron dispatch, Kanban dispatch, and new
+gateway turns fail closed while it exists; in-flight work is not killed.
+`resume` requires both an audit reason and an explicit readiness confirmation,
+then restores dispatch on the next tick without a restart. Both transitions are
+appended to `$HERMES_HOME/ESTOP_HISTORY.jsonl`. A corrupt or unreadable sentinel
+is treated as engaged, so operators should repair or replace it rather than
+deleting an ambiguous stop.
 
 ## `hermes chat`
 
@@ -664,9 +680,10 @@ Multi-profile, multi-project collaboration board. Each install can host many boa
 | `assign <id> <profile>` | Assign or reassign. Use `none` to unassign. Refused while task is running. |
 | `link <parent> <child>` | Add a dependency. Cycle-detected. Both tasks must be on the same board. |
 | `unlink <parent> <child>` | Remove a dependency. |
+| `supersede <old> <replacement>` | Atomically replace the old task's outgoing dependency edges, preserve both histories, recalculate affected children, and emit audit events. Refuses active children and cycles. |
 | `claim <id>` | Atomically claim a ready task. Prints resolved workspace path. |
 | `comment <id> "<text>"` | Append a comment. The next worker that claims the task reads it as part of its `kanban_show()` response. |
-| `complete <id>` | Mark task done. Flags: `--result`, `--summary`, `--metadata`. |
+| `complete <id>` | Close a task with a semantic verdict. Flags: `--result`, `--summary`, `--outcome completed\|pass\|block\|changes_required`, `--metadata`. Only `completed`/`pass` satisfy dependencies. |
 | `block <id> "<reason>"` | Mark task blocked for human input. Also appends the reason as a comment. |
 | `request-review <id>` | Move a task to `review` with a reviewer handoff — NOT a block. Flags: `--summary`, `--metadata`, `--reviewer` (reassigns before review dispatch). |
 | `request-changes <id> <reason>` | Reviewer verdict for an active review run: close the review attempt and route the task back to its original implementer. |

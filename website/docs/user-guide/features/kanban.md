@@ -82,6 +82,43 @@ guard, not OS isolation against arbitrary direct database writes. GitHub Enterpr
 is not covered. Related publication/lifecycle work: #91230, #84254, #52311; local
 verification and publication alone are not remote acceptance.
 
+## Semantic completion and dependency acceptance
+
+Task lifecycle and task verdict are separate. `done` means the attempt is closed;
+`completion_outcome` records whether downstream work may rely on it:
+
+| Outcome | Releases dependants? | Use for |
+|---|---:|---|
+| `completed` | yes | implementation or ordinary work completed and verified |
+| `pass` | yes | reviewer or validator accepted the evidence |
+| `block` | no | terminal receipt says delivery is blocked or failed |
+| `changes_required` | no | review found rework that must be completed first |
+
+Pass the verdict explicitly whenever a result is review-like or negative:
+
+```bash
+hermes kanban complete t_impl --outcome completed --summary "implemented and tested"
+hermes kanban complete t_review --outcome pass --summary "acceptance checks passed"
+hermes kanban complete t_review --outcome changes_required --summary "missing rollback evidence"
+```
+
+For older callers that omit `--outcome`, review completions default to `pass` and
+ordinary completions to `completed`. Legacy first-line prefixes such as `BLOCK:`,
+`FAILED:` and `CHANGES_REQUIRED:` are migrated conservatively to negative
+outcomes. New automation should not depend on prose inference.
+
+Dependency gating checks every direct and transitive ancestor. Only ancestors in
+`done` with `completed` or `pass` satisfy the graph. An archived task never
+satisfies a dependency: archive is visibility/retention housekeeping, not
+acceptance. A negative card and its terminal events remain inspectable as audit evidence, but its
+dependants stay in `todo` until a separately verified replacement is wired in.
+
+Use `hermes kanban supersede <old_id> <replacement_id>` for that replacement. It
+atomically moves the old task's outgoing dependency edges, recalculates affected
+children, and writes audit events while preserving both tasks' histories. It
+refuses active children, historical claim records, missing tasks and cycles; fix
+those conditions rather than editing SQLite directly.
+
 ## Kanban vs. `delegate_task`
 
 They look similar; they are not the same primitive.
@@ -113,7 +150,7 @@ They coexist: a kanban worker may call `delegate_task` internally during its run
   below. Single-project users stay on the `default` board and never see the
   word "board" outside this docs section.
 - **Task** — a row with title, optional body, one assignee (a profile name), status (`triage | todo | ready | running | blocked | review | done | archived`), optional tenant namespace, optional idempotency key (dedup for retried automation).
-- **Link** — `task_links` row recording a parent → child dependency. The dispatcher promotes `todo → ready` when all parents are `done`.
+- **Link** — `task_links` row recording a parent → child dependency. The dispatcher promotes `todo → ready` only when every direct and transitive ancestor has an accepted `completed`/`pass` outcome.
 - **Comment** — the inter-agent protocol. Agents and humans append comments; when a worker is (re-)spawned it reads the full comment thread as part of its context.
 - **Workspace** — the directory a worker operates in. Three kinds:
   - `scratch` (default) — fresh tmp dir under `~/.hermes/kanban/workspaces/<id>/` (or `~/.hermes/kanban/boards/<slug>/workspaces/<id>/` on non-default boards). **Deleted when the task completes** — scratch is ephemeral by design. Files explicitly declared through `kanban_complete(artifacts=[...])` are copied into durable per-task attachment storage before cleanup; existing deliverable paths in legacy completion summaries receive the same treatment. Other scratch files are removed. A missing declared scratch artifact keeps the task in-flight so the worker can correct the path and retry. Use `worktree:` or `dir:<path>` when the whole workspace should remain available. The first time a scratch workspace is created on an install, the dispatcher logs a warning and emits a `tip_scratch_workspace` event on the task (visible via `hermes kanban show <id>`).
@@ -391,7 +428,7 @@ kanban_create(title="research ICP funding — EU angle", assignee="researcher-b"
 kanban_create(
     title="synthesize findings into launch brief",
     assignee="writer",
-    parents=["t_r1", "t_r2"],                     # promotes to ready when both complete
+    parents=["t_r1", "t_r2"],                     # ready after both have accepted outcomes
     body="one-pager, 300 words, neutral tone",
 )
 kanban_complete(summary="decomposed into 2 research tasks + 1 writer; linked dependencies")
@@ -410,6 +447,19 @@ Three reasons:
 **Zero schema footprint on normal sessions.** A regular `hermes chat` session has zero `kanban_*` tools in its schema unless the active profile explicitly enables the `kanban` toolset for orchestrator work. Dispatcher-spawned task workers get task-scoped tools because `HERMES_KANBAN_TASK` is set; orchestrator profiles get the broader routing surface through config. No tool bloat for users who never touch kanban.
 
 The auto-injected kanban guidance teaches the model which tool to call when and in what order.
+
+### Forced-skill capability preflight
+
+Skills attached with `--skill` or `kanban_create(skills=[...])` are part of the
+execution contract. Before claiming a card or starting a worker, the dispatcher
+loads the exact assignee profile and verifies that every requested skill exists
+and is not disabled by that profile's skill/toolset policy. A missing, disabled,
+or unreadable forced skill fails closed: the card moves to `blocked` with
+`kind=capability` and a stable JSON reason whose code is
+`kanban_forced_skill_unavailable`. No worker or browser daemon is started.
+
+Resolve the named capability, install/enable the skill, or reassign the card;
+then unblock it. Do not repeatedly unblock an unchanged capability failure.
 
 ### Recommended handoff evidence
 
@@ -594,7 +644,7 @@ kanban_create(title="research ICP funding, EU angle",  assignee="researcher-b", 
 kanban_create(
     title="synthesize ICP funding research into launch post draft",
     assignee="writer",
-    parents=["t_r1", "t_r2"],        # promoted to 'ready' when both researchers complete
+    parents=["t_r1", "t_r2"],        # ready after both researchers have accepted outcomes
     body="one-pager, neutral tone, cite sources inline",
 )                                     # → t_w1
 # Optional: add cross-cutting deps discovered later without re-creating tasks
@@ -814,6 +864,8 @@ hermes kanban comment <id> "<text>" [--author NAME]
 
 # Bulk verbs — accept multiple ids:
 hermes kanban complete <id>... [--result "..."]
+        [--summary "..."] [--outcome completed|pass|block|changes_required]
+        [--metadata JSON]
 hermes kanban block <id> "<reason>" [--ids <id>...]
 hermes kanban unblock <id>...
 hermes kanban archive <id>...
@@ -998,9 +1050,9 @@ For worked examples of each, see `docs/hermes-kanban-v1-spec.pdf`.
 
 ## Handing context to follow-up cards (the parent link)
 
-A parent link is not just a scheduling gate — it is the context handoff channel from a **completed** card to a new one. When you create a card with `--parent <done-card-id>`, two things happen:
+A parent link is not just a scheduling gate — it is the context handoff channel from an **accepted** card to a new one. When you create a card with `--parent <accepted-card-id>`, two things happen:
 
-1. **It's immediately eligible.** `create_task` sets status by parent state: a child whose parents are all `done` is created directly in `ready` — no waiting, no manual promotion. (Children of still-open parents sit in `todo` until `recompute_ready` promotes them when the last parent finishes.)
+1. **It's immediately eligible only when the whole ancestry is accepted.** `create_task` sets status by dependency state: a child whose direct and transitive ancestors are all `done` with `completed`/`pass` outcomes is created directly in `ready`. A negative or archived ancestor keeps it in `todo` until the graph is corrected or an accepted replacement is applied with `supersede`.
 2. **The parent's handoff rides along.** The worker context assembled for the child (`build_worker_context`, what `kanban_show()` returns) contains a `## Parent task results` section with each parent's completion `summary` and `metadata`, verbatim:
 
 ```
@@ -1010,7 +1062,7 @@ Added exponential backoff with jitter to the retry helper.
 _metadata_: `{"changed_files": ["hermes_cli/retry.py", "tests/test_retry.py"], "decisions": ["capped backoff at 60s", "jitter = full"]}`
 ```
 
-This is why the pattern for follow-up work on a finished card is **a new child card, not reopening the done card**. Completed cards are immutable history — their context flows forward through the parent link. Same-card rework (retry loops on a failing card) is a different mechanism: prior attempts on the *same* card surface as "prior attempts" in that card's own context.
+This is why the normal pattern for a new outcome after an accepted card is **a new child card, not reopening the done card**. A `done` lifecycle state is reversible, but its runs and events remain audit history and its accepted context flows forward through the parent link. Reopen the same card only for rework on that same contract; prior attempts surface as "prior attempts" in its worker context.
 
 A worktree or branch alone is not a substitute: repo state tells the follow-up worker *what* the code looks like, but not *why* — the decisions, tests run, and files touched live in the parent's structured handoff, not in git. Evidence that didn't exist when the parent completed (e.g. a CI log that failed later) belongs in the new card's **body**.
 
@@ -1100,7 +1152,9 @@ hermes kanban notify-unsubscribe t_abcd \
     --platform telegram --chat-id 12345678 --thread-id 7
 ```
 
-A subscription removes itself automatically once the task reaches `done` or `archived`; no cleanup needed.
+Subscriptions survive `done` so review/reopen cycles remain observable. They are
+removed on `archived`; a bounded retention sweep also removes inactive `done` or
+`blocked` subscriptions after `kanban.done_sub_retention_days` (default 30).
 
 ### Delivery modes
 
@@ -1215,9 +1269,10 @@ Every transition appends a row to `task_events`. Each row carries an optional `r
 | Kind | Payload | When |
 |---|---|---|
 | `created` | `{assignee, status, parents, tenant}` | Task inserted. `run_id` is `NULL`. |
-| `promoted` | — | `todo → ready` because all parents hit `done`. `run_id` is `NULL`. |
+| `promoted` | — | `todo → ready` because all direct and transitive ancestors have accepted `completed`/`pass` outcomes. `run_id` is `NULL`. |
 | `claimed` | `{lock, expires, run_id}` | Dispatcher atomically claimed a `ready` task for spawn. |
-| `completed` | `{result_len, summary?}` | Worker wrote `--result` / `--summary` and task hit `done`. `summary` is the first-line handoff (400-char cap); full version lives on the run row. If `complete_task` is called on a never-claimed task with handoff fields, a zero-duration run is synthesized so `run_id` still points at something. |
+| `completed` | `{result_len, summary?, completion_outcome}` | Worker wrote `--result` / `--summary` and task hit `done`. `completion_outcome` determines whether dependencies are satisfied; lifecycle closure alone does not. `summary` is the first-line handoff (400-char cap); full version lives on the run row. If `complete_task` is called on a never-claimed task with handoff fields, a zero-duration run is synthesized so `run_id` still points at something. |
+| `superseded` / `supersession_applied` / `dependency_superseded` | `{old_task_id, replacement_task_id, children, actor}` | One atomic supersession preserved the old evidence, moved outgoing dependency edges to the replacement, and recalculated affected child readiness. |
 | `blocked` | `{reason, kind, recurrences}` | Worker or human flipped the task to `blocked`. `kind` is the typed block reason (`needs_input`, `capability`, `transient`, or `null` for a generic block); `recurrences` is the unblock-loop counter. Synthesizes a zero-duration run when called on a never-claimed task with `--reason`. |
 | `dependency_wait` | `{reason, kind}` | Worker blocked with `kind=dependency` — the task is only waiting on another task, so it routes to `todo` (parent-gated, auto-promoted) instead of `blocked`. No human needed. |
 | `block_loop_detected` | `{reason, kind, recurrences, limit}` | A task was unblocked and re-blocked for the same reason `BLOCK_RECURRENCE_LIMIT` times (default 2). Instead of landing in `blocked` again — where a cron would keep unblocking it — it routes to `triage` for a human decision, breaking the unblock↔re-block loop. |
