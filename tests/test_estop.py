@@ -246,6 +246,27 @@ def test_cli_pause_idempotent(hermes_home, capsys):
     assert estop.is_engaged() is True
 
 
+def test_profile_scoped_cli_pause_writes_the_canonical_fleet_sentinel(tmp_path, monkeypatch, capsys):
+    from hermes_cli.subcommands.pause import cmd_pause, cmd_resume
+
+    root = tmp_path / "hermes-root"
+    profile = root / "profiles" / "rook"
+    profile.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(profile))
+    estop._logged_components.clear()
+
+    assert cmd_pause(argparse.Namespace(reason="fleet maintenance")) == 0
+    assert (root / "ESTOP").is_file()
+    assert not (profile / "ESTOP").exists()
+    assert estop.is_engaged() is True
+
+    assert cmd_resume(argparse.Namespace(
+        reason="fleet readiness verified", confirm_readiness=True,
+    )) == 0
+    assert not (root / "ESTOP").exists()
+    assert estop.is_engaged() is False
+
+
 def test_cli_pause_refuses_missing_reason(hermes_home, capsys):
     from hermes_cli.subcommands.pause import cmd_pause
 
@@ -397,6 +418,23 @@ async def test_gateway_pause_command_engages_and_resumes(hermes_home):
 
     reply = await runner._handle_pause_command(_FakePauseEvent("off readiness checks passed"))
     assert "wasn't paused" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_profile_gateway_pause_command_writes_the_canonical_fleet_sentinel(tmp_path, monkeypatch):
+    from gateway.run import GatewayRunner
+
+    root = tmp_path / "hermes-root"
+    profile = root / "profiles" / "rook"
+    profile.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(profile))
+    estop._logged_components.clear()
+    runner = object.__new__(GatewayRunner)
+
+    reply = await runner._handle_pause_command(_FakePauseEvent("fleet incident"))
+    assert "paused" in reply.lower()
+    assert (root / "ESTOP").is_file()
+    assert not (profile / "ESTOP").exists()
 
 
 def test_pause_command_registered_for_gateway():

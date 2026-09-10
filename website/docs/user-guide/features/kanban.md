@@ -60,15 +60,22 @@ The shared `complete_task` boundary covers worker tools, CLI, review approval an
 dashboard completion. It reads classic branch protection and active ruleset
 required contexts, paginates exact-head check runs and legacy statuses, then
 re-reads the PR head/base. Optional failed/skipped telemetry does not veto accepted
-required checks. Missing, pending, failed, cancelled, timed-out, stale, skipped or
-neutral **required** evidence cannot complete the card. Neither can zero-run
-acceptance, unreadable policy or GitHub API failures. A repository without required
-checks needs a local-only contract. `gh` must be authenticated with read access to
-the repository's checks and rules; no remote writes are performed by this gate.
+required checks. If no required contexts are configured, or a private repository's
+plan does not expose the rules endpoint, an exact-PR contract conservatively requires
+every substantive latest check and legacy status reported for that immutable head to
+succeed. Deliberately skipped or neutral jobs are recorded as non-evidence and ignored;
+they cannot establish acceptance by themselves.
+Missing, pending, failed, cancelled, timed-out, stale, skipped or neutral required
+evidence, and missing, pending, failed, cancelled, timed-out or stale fallback
+evidence, cannot complete the card. Neither can zero-run acceptance or
+an unreadable PR/check API. A repository with no current-head CI evidence needs a
+local-only contract. `gh` must be authenticated with read access to the repository's
+PR and check data; no remote writes are performed by this gate.
 
 Rejection retains the active card and workspace. Durable `pr_acceptance` events
-store PR URL, SHA, required contexts, check IDs/URLs, classifications and recovery
-instructions; `last_failure_error` surfaces the next step. Fix failures, rerun
+store PR URL, SHA, evidence source, rules availability, required contexts, check
+IDs/URLs, classifications and recovery instructions; `last_failure_error` surfaces
+the next step. Fix failures, rerun
 infrastructure checks or wait, then retry completion. Use `kanban_block` when
 human action is needed. Generic GitHub `failure` cannot establish whether a test
 or artifact upload failed; inspect its retained URL. Explicit infrastructure

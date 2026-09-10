@@ -61,21 +61,47 @@ def collect_acceptance(contract: str, published_pr: str | None) -> dict:
             raise ValueError("PR is closed or current head is unavailable")
         protection = (pr.get("baseRef") or {}).get("branchProtectionRule") or {}
         required = {(r["context"], (r.get("app") or {}).get("databaseId")) for r in protection.get("requiredStatusChecks", [])}
-        rules = _api(f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100", paginate=True)
-        for page in rules:
-            for rule in page:
-                if rule["type"] == "required_status_checks":
-                    required.update((r["context"], r.get("integration_id"))
-                                    for r in rule["parameters"]["required_status_checks"])
-        receipt["required"] = [{"context": c, "app_id": a} for c, a in sorted(required, key=str)]
-        if not required:
-            receipt["detail"] = "No repository-required checks are configured; explicitly use a local-only contract for non-CI tasks."
-            return receipt
+        rules_available = True
+        try:
+            rules = _api(f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100", paginate=True)
+            for page in rules:
+                for rule in page:
+                    if rule["type"] == "required_status_checks":
+                        required.update((r["context"], r.get("integration_id"))
+                                        for r in rule["parameters"]["required_status_checks"])
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, IndexError):
+            # Private repositories on plans without rulesets return 403 here.
+            # Continue to the exact-head check inventory; any wider GitHub
+            # outage will still fail closed on the following API reads.
+            rules_available = False
         pages = _api(f"repos/{repo}/commits/{sha}/check-runs?per_page=100&filter=latest", paginate=True)
         runs = [run for page in pages for run in page["check_runs"]]
         if len({r["id"] for r in runs}) != pages[0]["total_count"]:
             raise ValueError("Incomplete check-run pagination")
         statuses = [{**s, "sha": sha} for page in _api(f"repos/{repo}/commits/{sha}/statuses?per_page=100", paginate=True) for s in page]
+        if not required:
+            # When repository policy is unavailable or deliberately absent,
+            # an exact-PR contract requires every substantive latest check on
+            # that immutable head. GitHub's deliberately skipped/neutral jobs
+            # are not test evidence and do not veto other successful jobs;
+            # they also cannot establish acceptance by themselves.
+            fallback_runs = [
+                r for r in runs if r.get("conclusion") not in {"skipped", "neutral"}
+            ]
+            required.update(
+                (r["name"], (r.get("app") or {}).get("id")) for r in fallback_runs
+            )
+            run_names = {r["name"] for r in fallback_runs}
+            required.update((s["context"], None) for s in statuses if s["context"] not in run_names)
+            receipt["required_source"] = "current_head_ci_fallback"
+            receipt["ignored_non_evidence_checks"] = len(runs) - len(fallback_runs)
+        else:
+            receipt["required_source"] = "repository_policy"
+        receipt["repository_rules_available"] = rules_available
+        receipt["required"] = [{"context": c, "app_id": a} for c, a in sorted(required, key=str)]
+        if not required:
+            receipt["detail"] = "No current-head check evidence is available; use a local-only contract only for non-CI tasks."
+            return receipt
         outcomes = []
         for context, app_id in sorted(required, key=str):
             matching = [r for r in runs if r["name"] == context and

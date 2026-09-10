@@ -1,6 +1,6 @@
 """``hermes pause`` / ``hermes resume`` — the global emergency stop.
 
-``pause`` writes the ESTOP sentinel at ``$HERMES_HOME/ESTOP``; cron, kanban and new gateway
+``pause`` writes the ESTOP sentinel at the canonical fleet root; cron, kanban and new gateway
 turns halt on their next check (in-flight work is never killed). ``resume`` removes it and
 operation resumes on the next tick — no restart. Ported from gastownhall/gastown estop.go (MIT).
 """
@@ -12,14 +12,14 @@ import argparse
 
 def cmd_pause(args: argparse.Namespace) -> int:
     """Engage the global emergency stop."""
-    from agent.estop import engage, get_state, is_engaged
+    from agent.estop import engage_global, get_state, is_engaged
 
     reason = (getattr(args, "reason", None) or "").strip()
     if not reason:
         print("Refusing an unaudited pause: provide --reason.")
         return 2
     already = is_engaged()
-    path = engage(reason=reason)
+    path = engage_global(reason=reason)
     state = get_state() or {}
     verb = "Still paused" if already else "Hermes paused"
     detail = f" — reason: {state['reason']}" if state.get("reason") else ""

@@ -9,6 +9,7 @@ import pytest
 
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_db_connect as kbc
+from hermes_cli import kanban_db_dispatch as kbd
 
 
 @pytest.fixture
@@ -48,7 +49,7 @@ def _dispatch(home: Path, skills: list[str]):
         task_id = kb.create_task(
             conn, title="capability preflight", assignee="alpha", skills=skills
         )
-        result = kb.dispatch_once(conn, spawn_fn=spawn, reconcile_orphans=False)
+        result = kbd.dispatch_once(conn, spawn_fn=spawn, reconcile_orphans=False)
         return result, kb.get_task(conn, task_id), spawned, kb.list_events(conn, task_id)
 
 
