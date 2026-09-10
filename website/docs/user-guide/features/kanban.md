@@ -62,9 +62,12 @@ required contexts, paginates exact-head check runs and legacy statuses, then
 re-reads the PR head/base. Optional failed/skipped telemetry does not veto accepted
 required checks. If no required contexts are configured, or a private repository's
 plan does not expose the rules endpoint, an exact-PR contract conservatively requires
-every latest check and legacy status reported for that immutable head to succeed.
+every substantive latest check and legacy status reported for that immutable head to
+succeed. Deliberately skipped or neutral jobs are recorded as non-evidence and ignored;
+they cannot establish acceptance by themselves.
 Missing, pending, failed, cancelled, timed-out, stale, skipped or neutral required
-or fallback evidence cannot complete the card. Neither can zero-run acceptance or
+evidence, and missing, pending, failed, cancelled, timed-out or stale fallback
+evidence, cannot complete the card. Neither can zero-run acceptance or
 an unreadable PR/check API. A repository with no current-head CI evidence needs a
 local-only contract. `gh` must be authenticated with read access to the repository's
 PR and check data; no remote writes are performed by this gate.

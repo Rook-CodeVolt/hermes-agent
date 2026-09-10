@@ -81,14 +81,20 @@ def collect_acceptance(contract: str, published_pr: str | None) -> dict:
         statuses = [{**s, "sha": sha} for page in _api(f"repos/{repo}/commits/{sha}/statuses?per_page=100", paginate=True) for s in page]
         if not required:
             # When repository policy is unavailable or deliberately absent,
-            # an exact-PR contract remains useful by requiring every latest
-            # check reported for that immutable head. This is conservative:
-            # skipped, neutral, pending, cancelled, missing, or failed checks
-            # all reject completion. With no check evidence, fail closed.
-            required.update((r["name"], (r.get("app") or {}).get("id")) for r in runs)
-            run_names = {r["name"] for r in runs}
+            # an exact-PR contract requires every substantive latest check on
+            # that immutable head. GitHub's deliberately skipped/neutral jobs
+            # are not test evidence and do not veto other successful jobs;
+            # they also cannot establish acceptance by themselves.
+            fallback_runs = [
+                r for r in runs if r.get("conclusion") not in {"skipped", "neutral"}
+            ]
+            required.update(
+                (r["name"], (r.get("app") or {}).get("id")) for r in fallback_runs
+            )
+            run_names = {r["name"] for r in fallback_runs}
             required.update((s["context"], None) for s in statuses if s["context"] not in run_names)
-            receipt["required_source"] = "all_current_head_checks"
+            receipt["required_source"] = "current_head_ci_fallback"
+            receipt["ignored_non_evidence_checks"] = len(runs) - len(fallback_runs)
         else:
             receipt["required_source"] = "repository_policy"
         receipt["repository_rules_available"] = rules_available

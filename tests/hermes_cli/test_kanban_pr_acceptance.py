@@ -148,15 +148,26 @@ def test_exact_pr_uses_all_head_checks_when_private_repository_rules_are_unavail
         if "/rules/branches/" in endpoint:
             raise subprocess.CalledProcessError(1, ["gh", "api"])
         if "/check-runs" in endpoint:
-            return [{"total_count": 1, "check_runs": [{
-                "id": 42,
-                "name": "verify",
-                "head_sha": sha,
-                "app": {"id": 1},
-                "status": "completed",
-                "conclusion": conclusion,
-                "html_url": "https://github.com/acme/repo/actions/runs/42",
-            }]}]
+            return [{"total_count": 2, "check_runs": [
+                {
+                    "id": 42,
+                    "name": "verify",
+                    "head_sha": sha,
+                    "app": {"id": 1},
+                    "status": "completed",
+                    "conclusion": conclusion,
+                    "html_url": "https://github.com/acme/repo/actions/runs/42",
+                },
+                {
+                    "id": 43,
+                    "name": "optional-platform-build",
+                    "head_sha": sha,
+                    "app": {"id": 1},
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "html_url": "https://github.com/acme/repo/actions/runs/43",
+                },
+            ]}]
         if "/statuses" in endpoint:
             return [[]]
         if "/pulls/" in endpoint:
@@ -169,8 +180,9 @@ def test_exact_pr_uses_all_head_checks_when_private_repository_rules_are_unavail
         "https://github.com/acme/repo/pull/7", None,
     )
     assert receipt["ok"] is True
-    assert receipt["required_source"] == "all_current_head_checks"
+    assert receipt["required_source"] == "current_head_ci_fallback"
     assert receipt["repository_rules_available"] is False
+    assert receipt["ignored_non_evidence_checks"] == 1
     assert receipt["required"] == [{"context": "verify", "app_id": 1}]
 
     conclusion = "skipped"
@@ -178,7 +190,7 @@ def test_exact_pr_uses_all_head_checks_when_private_repository_rules_are_unavail
         "https://github.com/acme/repo/pull/7", None,
     )
     assert receipt["ok"] is False
-    assert receipt["classification"] == "infra"
+    assert receipt["classification"] == "missing"
 
 
 def test_exact_pr_without_repository_policy_or_head_checks_fails_closed(monkeypatch):
