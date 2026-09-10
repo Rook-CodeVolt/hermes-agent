@@ -745,6 +745,7 @@ hermes kanban schedule <id> --at <ISO8601>             # set/clear a task's sche
 hermes kanban diagnostics [--json]                     # board health snapshot (alias: diag)
 hermes kanban link <parent_id> <child_id>
 hermes kanban unlink <parent_id> <child_id>
+hermes kanban supersede <old_id> <replacement_id> [--json] # atomically replace outgoing edges and preserve old history
 hermes kanban claim <id> [--ttl SECONDS]
 hermes kanban comment <id> "<text>" [--author NAME]
 

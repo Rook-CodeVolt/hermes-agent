@@ -556,6 +556,7 @@ hermes kanban show <id> [--json]
 hermes kanban assign <id> <profile>                    # 或 'none' 取消分配
 hermes kanban link <parent_id> <child_id>
 hermes kanban unlink <parent_id> <child_id>
+hermes kanban supersede <old_id> <replacement_id> [--json] # 原子替换传出依赖并保留旧任务历史
 hermes kanban claim <id> [--ttl SECONDS]
 hermes kanban comment <id> "<text>" [--author NAME]
 
