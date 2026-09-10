@@ -1,6 +1,7 @@
 """Two lifecycle invariants, using real SQLite and a local GitHub HTTP contract."""
 import json
 import os
+import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -8,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_pr_acceptance as pr_acceptance
 from hermes_cli.kanban_db_connect import connect
 
 
@@ -129,3 +131,81 @@ def test_acceptance_receipts_and_terminal_write_share_run_ownership(github):
             assert kb.get_task(conn, tid).status != "done"
             assert conn.execute("SELECT count(*) FROM task_events WHERE task_id=? AND kind='pr_acceptance'", (tid,)).fetchone()[0] == 0
             github.pop("race")
+
+
+def test_exact_pr_uses_all_head_checks_when_private_repository_rules_are_unavailable(monkeypatch):
+    conclusion = "success"
+    sha = "a" * 40
+
+    def fake_api(endpoint, *, query=None, paginate=False):
+        if endpoint == "graphql":
+            return {"data": {"repository": {"pullRequest": {
+                "headRefOid": sha,
+                "baseRefName": "main",
+                "state": "MERGED",
+                "baseRef": {"branchProtectionRule": None},
+            }}}}
+        if "/rules/branches/" in endpoint:
+            raise subprocess.CalledProcessError(1, ["gh", "api"])
+        if "/check-runs" in endpoint:
+            return [{"total_count": 1, "check_runs": [{
+                "id": 42,
+                "name": "verify",
+                "head_sha": sha,
+                "app": {"id": 1},
+                "status": "completed",
+                "conclusion": conclusion,
+                "html_url": "https://github.com/acme/repo/actions/runs/42",
+            }]}]
+        if "/statuses" in endpoint:
+            return [[]]
+        if "/pulls/" in endpoint:
+            return {"head": {"sha": sha}, "base": {"ref": "main"},
+                    "state": "closed", "merged": True}
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(pr_acceptance, "_api", fake_api)
+    receipt = pr_acceptance.collect_acceptance(
+        "https://github.com/acme/repo/pull/7", None,
+    )
+    assert receipt["ok"] is True
+    assert receipt["required_source"] == "all_current_head_checks"
+    assert receipt["repository_rules_available"] is False
+    assert receipt["required"] == [{"context": "verify", "app_id": 1}]
+
+    conclusion = "skipped"
+    receipt = pr_acceptance.collect_acceptance(
+        "https://github.com/acme/repo/pull/7", None,
+    )
+    assert receipt["ok"] is False
+    assert receipt["classification"] == "infra"
+
+
+def test_exact_pr_without_repository_policy_or_head_checks_fails_closed(monkeypatch):
+    sha = "a" * 40
+
+    def fake_api(endpoint, *, query=None, paginate=False):
+        if endpoint == "graphql":
+            return {"data": {"repository": {"pullRequest": {
+                "headRefOid": sha,
+                "baseRefName": "main",
+                "state": "OPEN",
+                "baseRef": {"branchProtectionRule": None},
+            }}}}
+        if "/rules/branches/" in endpoint:
+            return [[]]
+        if "/check-runs" in endpoint:
+            return [{"total_count": 0, "check_runs": []}]
+        if "/statuses" in endpoint:
+            return [[]]
+        if "/pulls/" in endpoint:
+            return {"head": {"sha": sha}, "base": {"ref": "main"}, "state": "open"}
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(pr_acceptance, "_api", fake_api)
+    receipt = pr_acceptance.collect_acceptance(
+        "https://github.com/acme/repo/pull/7", None,
+    )
+    assert receipt["ok"] is False
+    assert receipt["classification"] == "missing"
+    assert receipt["required"] == []
