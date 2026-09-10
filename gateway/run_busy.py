@@ -852,7 +852,7 @@ class GatewayBusySessionMixin:
             return f"⏸️ Hermes is already paused{suffix}. Use `/pause off` to resume."
         if not args:
             return "Pause refused: use `/pause <reason>` so the incident is auditable."
-        estop.engage(reason=args)
+        estop.engage_global(reason=args)
         suffix = f" (reason: {args})" if args else ""
         return (
             f"⏸️ Paused{suffix}. New cron/kanban/gateway work is on hold; "

@@ -109,11 +109,14 @@ hermes pause --reason "unexpected dispatch loop"
 hermes resume --reason "DB and ready lane verified" --confirm-readiness
 ```
 
-`pause` writes `$HERMES_HOME/ESTOP`. Cron dispatch, Kanban dispatch, and new
-gateway turns fail closed while it exists; in-flight work is not killed.
+`pause` writes the canonical fleet-root `ESTOP` even when the CLI or messaging
+gateway is running under a named profile. Cron dispatch, Kanban dispatch, and
+new gateway turns across the fleet fail closed while it exists; in-flight work
+is not killed. Older profile-local sentinels remain honoured and are removed by
+the same resume command.
 `resume` requires both an audit reason and an explicit readiness confirmation,
 then restores dispatch on the next tick without a restart. Both transitions are
-appended to `$HERMES_HOME/ESTOP_HISTORY.jsonl`. A corrupt or unreadable sentinel
+appended to the fleet-root `ESTOP_HISTORY.jsonl`. A corrupt or unreadable sentinel
 is treated as engaged, so operators should repair or replace it rather than
 deleting an ambiguous stop.
 

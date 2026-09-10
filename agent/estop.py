@@ -1,7 +1,7 @@
 """Global emergency stop (ESTOP) — a resumable pause for NEW work only.
 
-``hermes pause`` writes a sentinel at ``$HERMES_HOME/ESTOP``; ``hermes resume``
-removes it. While it exists the cron scheduler, kanban dispatcher and new gateway
+``hermes pause`` writes a sentinel at the fleet root; ``hermes resume`` removes
+it. While it exists the cron scheduler, kanban dispatcher and new gateway
 turns skip work; in-flight work is never killed. The check is one or two uncached
 ``os.stat`` calls (process home + fleet root when they differ). The body is optional
 JSON ``{"reason", "engaged_at"}``; a corrupt/empty file still counts as engaged
@@ -32,8 +32,13 @@ _logged_components: set[str] = set()
 
 
 def sentinel_path() -> Path:
-    """Path of the ESTOP sentinel this process would write on `hermes pause`."""
+    """Profile-local ESTOP path used by the low-level component API."""
     return _hermes_home() / SENTINEL_NAME
+
+
+def fleet_sentinel_path() -> Path:
+    """Canonical fleet-wide ESTOP path used by operator-facing pause commands."""
+    return _canonical_root() / SENTINEL_NAME
 
 
 def _candidate_sentinel_paths() -> list:
@@ -86,8 +91,17 @@ def _audit(action: str, payload: dict) -> None:
 
 
 def engage(reason: Optional[str] = None, *, engaged_by: Optional[str] = None) -> Path:
-    """Create the ESTOP sentinel. Idempotent; re-engaging updates the file."""
-    path = sentinel_path()
+    """Create the process-local ESTOP sentinel for component-level callers."""
+    return _engage_at(sentinel_path(), reason=reason, engaged_by=engaged_by)
+
+
+def engage_global(reason: Optional[str] = None, *, engaged_by: Optional[str] = None) -> Path:
+    """Create the canonical fleet-root ESTOP regardless of active profile."""
+    return _engage_at(fleet_sentinel_path(), reason=reason, engaged_by=engaged_by)
+
+
+def _engage_at(path: Path, *, reason: Optional[str], engaged_by: Optional[str]) -> Path:
+    """Create one ESTOP sentinel. Idempotent; re-engaging updates the file."""
     payload = {
         "engaged_at": datetime.now(timezone.utc).isoformat(),
         "engaged_by": _operator_identity(engaged_by),
