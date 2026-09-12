@@ -787,6 +787,8 @@ All commands are also available as a slash command in the interactive CLI and in
 
 `--max-retries` is a per-task circuit-breaker override for the dispatcher. `--max-retries 1` blocks the task on the first non-successful attempt, while `--max-retries 3` allows two retries and blocks on the third failure. Omit it to use `kanban.failure_limit` from `config.yaml`, then the built-in default.
 
+A manual `kanban unblock` / `kanban_unblock` always resets the task's `consecutive_failures` counter to zero, by design — a deliberate unblock is a human judgment call that the prior failure(s) were transient/environmental, so it gives the task a fresh retry budget rather than resuming a tripped breaker with memory. This means a `--max-retries 1` task can legitimately consume more than one dispatch attempt when a human unblocks it between failures; that is expected operator-driven behavior, not a circuit-breaker accounting defect.
+
 ### Concurrency, scheduling, and child promotion config
 
 | Config key | Default | What it does |
