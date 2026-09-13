@@ -183,6 +183,7 @@ def _reap_idle_sessions() -> None:
             predicate=lambda session, vs=sid: _session_is_evictable(vs, session, time.time()))
     _repair_missing_ws_orphan_reaps()
     _enforce_session_cap()
+    _release_idle_session_leases()
     _reclaim_orphaned_leases()
     # Long-lived processes: gen2 GC rarely runs at steady state and glibc retains freed pages as RSS, so trim
     # every scan to prevent unbounded RSS growth over days/weeks.

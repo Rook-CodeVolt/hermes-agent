@@ -88,6 +88,47 @@ def _release_active_session_slot(session: dict | None) -> bool:
     return True
 
 
+def _session_lease_idle_eligible(sid: str, session: dict, now: float) -> bool:
+    """A backgrounded-but-connected desktop tab: liveness-tracked lease held on an idle session
+    with nothing outstanding. Deliberately does NOT gate on ``_transport_is_dead`` — that is
+    exactly the predicate a backgrounded tab never satisfies (its WebSocket stays open), which is
+    why ``_session_is_evictable``'s TTL reaper never reaches these leases. Every other exemption
+    mirrors ``_session_is_lru_evictable`` (never touch running/pending/mid-build/delegating work),
+    since releasing mid-session must be safe to do silently."""
+    lease = session.get("active_session_lease")
+    if lease is None or not getattr(lease, "track_liveness", False):
+        return False
+    if session.get("running") or _session_pending_kind(sid) or _session_has_active_delegations(sid, session):
+        return False
+    ready = session.get("agent_ready")
+    if ready is not None and not ready.is_set():
+        return False
+    last_active = float(session.get("last_active") or session.get("created_at") or 0.0)
+    return (now - last_active) > _TUI_LEASE_IDLE_S
+
+
+def _release_idle_session_leases() -> None:
+    """Free liveness-tracked leases idled past ``tui_lease_idle_seconds`` — the backgrounded-tab
+    case the WS-orphan reaper and the dead-transport-gated TTL reaper both miss (see
+    ``_session_lease_idle_eligible``). Session/agent/transcript are left alone: a tab that types
+    again transparently re-claims a slot via ``_ensure_active_session_slot`` on its next turn. See
+    task t_0952d696."""
+    if _TUI_LEASE_IDLE_S <= 0:
+        return
+    now = time.time()
+    with _sessions_lock:
+        candidates = [(sid, s) for sid, s in _sessions.items() if _session_lease_idle_eligible(sid, s, now)]
+    for sid, session in candidates:
+        with _sessions_lock:
+            # Revalidate under the lock right before release: a concurrent turn/close/delegation
+            # start between the snapshot above and now must not have this stolen out from under it.
+            if _sessions.get(sid) is not session or not _session_lease_idle_eligible(sid, session, now):
+                continue
+            released = _release_active_session_slot(session)
+        if released:
+            logger.info("Released idle desktop session lease sid=%s (idle > %.0fs)", sid, _TUI_LEASE_IDLE_S)
+
+
 def _own_live_lease_ids(*, exclude=None) -> set[str]:
     """Snapshot leases still backed by this process's live session records."""
     with _sessions_lock:

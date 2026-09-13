@@ -136,6 +136,19 @@ _WS_ORPHAN_REAP_GRACE_S = _resolve_ws_orphan_reap_grace()
 # A detached RUNNING turn is interrupted only once its activity clock (API waits, stream tokens, tool
 # heartbeats) idled this long; 600s = the turn-liveness watchdog so "wedged" means the same. 0 disables.
 _WS_ORPHAN_ACTIVITY_STALE_S = _ws_orphan_setting("HERMES_TUI_WS_ORPHAN_ACTIVITY_STALE_S", "ws_orphan_activity_stale_s", 600.0)
+# Liveness-tracked (desktop) session leases release after this many idle seconds even while the
+# WebSocket stays open. Backgrounding/switching away from a tab never sends a clean WS close, so
+# neither the WS-orphan reaper above (needs a disconnect) nor the dead-transport-gated
+# _SESSION_TTL_S reaper (needs _transport_is_dead, below) ever frees these leases — only a full
+# process restart did, pre-fix. 0 disables (old behaviour: park until TTL/restart). Releasing the
+# lease does not touch the session/agent/transcript: _ensure_active_session_slot transparently
+# re-claims on the session's next turn. See task t_0952d696.
+def _resolve_tui_lease_idle_seconds() -> float:
+    """``dashboard.tui_lease_idle_seconds`` seconds (0 = disabled); env var wins when set."""
+    return _ws_orphan_setting("HERMES_TUI_LEASE_IDLE_SECONDS", "tui_lease_idle_seconds", 1800.0)
+
+
+_TUI_LEASE_IDLE_S = _resolve_tui_lease_idle_seconds()
 _WS_ORPHAN_INTERRUPT_REAP_POLL_S = 1.0
 # Interrupt-then-reap poll budget: a turn that never settles (thread hung in a syscall) would
 # reschedule the 1s poll forever; after this many polls, log loudly and force-reap.

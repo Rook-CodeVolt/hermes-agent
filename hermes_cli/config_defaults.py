@@ -954,6 +954,12 @@ DEFAULT_CONFIG = {
         # leaves disconnected sessions ``ended_at IS NULL`` forever — phantom "active" rows in /resume and
         # dashboards. See #65194.
         "startup_orphan_sweep": True,
+        # Liveness-tracked (desktop) session leases release after this many idle seconds even
+        # while the WebSocket stays open — backgrounding a tab never sends a clean close, so a
+        # parked lease otherwise persists until the 6h TTL/process restart, spamming the
+        # dashboard's "N operator sessions" count. 0 disables. Env: HERMES_TUI_LEASE_IDLE_SECONDS.
+        # See task t_0952d696.
+        "tui_lease_idle_seconds": 1800.0,
         # OAuth gate (engaged when --host is set and --insecure is not), read by the Nous Portal
         # plugin. Env HERMES_DASHBOARD_OAUTH_CLIENT_ID / HERMES_DASHBOARD_PORTAL_URL win when
         # non-empty. Empty client_id = no provider; empty portal_url = production.
