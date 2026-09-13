@@ -14,6 +14,7 @@ Config keys this provider responds to::
     web:
       search_backend: "searxng"     # explicit per-capability
       backend: "searxng"            # shared fallback
+      searxng_timeout: 15           # HTTP timeout in seconds (default 15)
 
 Env var::
 
@@ -23,12 +24,18 @@ Env var::
 from __future__ import annotations
 
 import logging
+import math
 import os
 from typing import Any, Dict
 
 from agent.web_search_provider import WebSearchProvider
 
 logger = logging.getLogger(__name__)
+
+# Historical hardcoded value, preserved as the default when
+# ``web.searxng_timeout`` is unset or invalid. Mirrors
+# ``hermes_cli.config_defaults`` DEFAULTS["web"]["searxng_timeout"].
+DEFAULT_SEARXNG_TIMEOUT = 15.0
 
 
 def _searxng_url() -> str:
@@ -42,6 +49,51 @@ def _searxng_url() -> str:
     if val is None:
         val = os.getenv("SEARXNG_URL", "")
     return (val or "").strip()
+
+
+def _get_searxng_timeout() -> float:
+    """Resolve the SearXNG HTTP timeout (seconds) from ``web.searxng_timeout``.
+
+    Falls back to :data:`DEFAULT_SEARXNG_TIMEOUT` (the historical hardcoded
+    15s) whenever the configured value is missing, non-numeric, NaN,
+    infinite, zero, or negative — matching the fail-safe pattern used by
+    ``tools.web_tools._get_extract_char_limit`` and
+    ``hermes_cli.web_models._validate_reference_timeout``. A bad value never
+    disables search; it just falls back to the known-good default and logs
+    a warning so the misconfiguration is visible.
+    """
+    try:
+        import tools.web_tools as _wt
+
+        configured = _wt._load_web_config().get("searxng_timeout")
+    except Exception:
+        configured = None
+
+    if configured is None:
+        return DEFAULT_SEARXNG_TIMEOUT
+
+    try:
+        # Reject bool explicitly — bool is a subclass of int and would
+        # otherwise silently coerce to 1.0/0.0 (0.0 would then be caught by
+        # the isfinite/positive check below, but True→1.0 would not).
+        if isinstance(configured, bool):
+            raise ValueError("bool is not a valid timeout")
+        timeout = float(configured)
+    except (TypeError, ValueError):
+        logger.warning(
+            "web.searxng_timeout=%r is not a valid number; using default %.0fs",
+            configured, DEFAULT_SEARXNG_TIMEOUT,
+        )
+        return DEFAULT_SEARXNG_TIMEOUT
+
+    if not math.isfinite(timeout) or timeout <= 0:
+        logger.warning(
+            "web.searxng_timeout=%r must be a finite positive number; using default %.0fs",
+            configured, DEFAULT_SEARXNG_TIMEOUT,
+        )
+        return DEFAULT_SEARXNG_TIMEOUT
+
+    return timeout
 
 
 class SearXNGWebSearchProvider(WebSearchProvider):
@@ -83,7 +135,7 @@ class SearXNGWebSearchProvider(WebSearchProvider):
             resp = httpx.get(
                 f"{base_url}/search",
                 params=params,
-                timeout=15,
+                timeout=_get_searxng_timeout(),
                 headers={"Accept": "application/json"},
             )
             resp.raise_for_status()

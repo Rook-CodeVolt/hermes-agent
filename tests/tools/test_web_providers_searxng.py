@@ -111,6 +111,107 @@ class TestSearXNGSearchProviderSearch:
 
 
 # ---------------------------------------------------------------------------
+# _get_searxng_timeout() — web.searxng_timeout config resolution
+# ---------------------------------------------------------------------------
+
+
+class TestSearXNGTimeoutConfig:
+    """Covers plugins.web.searxng.provider._get_searxng_timeout()."""
+
+    def test_default_when_unset(self):
+        from plugins.web.searxng import provider as searxng_provider
+        with patch("tools.web_tools._load_web_config", return_value={}):
+            assert searxng_provider._get_searxng_timeout() == searxng_provider.DEFAULT_SEARXNG_TIMEOUT
+            assert searxng_provider._get_searxng_timeout() == 15.0
+
+    def test_valid_override_is_honored(self):
+        from plugins.web.searxng import provider as searxng_provider
+        with patch("tools.web_tools._load_web_config", return_value={"searxng_timeout": 45}):
+            assert searxng_provider._get_searxng_timeout() == 45.0
+
+    def test_valid_float_string_override_is_honored(self):
+        """config.yaml YAML parsing can hand back numeric strings; accept them."""
+        from plugins.web.searxng import provider as searxng_provider
+        with patch("tools.web_tools._load_web_config", return_value={"searxng_timeout": "30.5"}):
+            assert searxng_provider._get_searxng_timeout() == 30.5
+
+    def test_zero_falls_back_to_default(self):
+        from plugins.web.searxng import provider as searxng_provider
+        with patch("tools.web_tools._load_web_config", return_value={"searxng_timeout": 0}):
+            assert searxng_provider._get_searxng_timeout() == searxng_provider.DEFAULT_SEARXNG_TIMEOUT
+
+    def test_negative_falls_back_to_default(self):
+        from plugins.web.searxng import provider as searxng_provider
+        with patch("tools.web_tools._load_web_config", return_value={"searxng_timeout": -5}):
+            assert searxng_provider._get_searxng_timeout() == searxng_provider.DEFAULT_SEARXNG_TIMEOUT
+
+    def test_nan_falls_back_to_default(self):
+        from plugins.web.searxng import provider as searxng_provider
+        with patch("tools.web_tools._load_web_config", return_value={"searxng_timeout": float("nan")}):
+            assert searxng_provider._get_searxng_timeout() == searxng_provider.DEFAULT_SEARXNG_TIMEOUT
+
+    def test_infinity_falls_back_to_default(self):
+        from plugins.web.searxng import provider as searxng_provider
+        with patch("tools.web_tools._load_web_config", return_value={"searxng_timeout": float("inf")}):
+            assert searxng_provider._get_searxng_timeout() == searxng_provider.DEFAULT_SEARXNG_TIMEOUT
+
+    def test_non_numeric_string_falls_back_to_default(self):
+        from plugins.web.searxng import provider as searxng_provider
+        with patch("tools.web_tools._load_web_config", return_value={"searxng_timeout": "not-a-number"}):
+            assert searxng_provider._get_searxng_timeout() == searxng_provider.DEFAULT_SEARXNG_TIMEOUT
+
+    def test_bool_falls_back_to_default(self):
+        """bool is an int subclass; must not silently coerce to 1.0/0.0."""
+        from plugins.web.searxng import provider as searxng_provider
+        with patch("tools.web_tools._load_web_config", return_value={"searxng_timeout": True}):
+            assert searxng_provider._get_searxng_timeout() == searxng_provider.DEFAULT_SEARXNG_TIMEOUT
+
+    def test_none_value_falls_back_to_default(self):
+        from plugins.web.searxng import provider as searxng_provider
+        with patch("tools.web_tools._load_web_config", return_value={"searxng_timeout": None}):
+            assert searxng_provider._get_searxng_timeout() == searxng_provider.DEFAULT_SEARXNG_TIMEOUT
+
+    def test_search_passes_resolved_timeout_to_httpx(self, monkeypatch):
+        """End-to-end: search() must forward the resolved timeout to httpx.get."""
+        monkeypatch.setenv("SEARXNG_URL", "http://localhost:8080")
+        from plugins.web.searxng.provider import SearXNGWebSearchProvider
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"results": []}
+        mock_resp.raise_for_status = MagicMock()
+
+        captured = {}
+        def capture_get(url, **kwargs):
+            captured.update(kwargs)
+            return mock_resp
+
+        with patch("tools.web_tools._load_web_config", return_value={"searxng_timeout": 45}), \
+             patch("httpx.get", side_effect=capture_get):
+            SearXNGWebSearchProvider().search("query", limit=5)
+
+        assert captured["timeout"] == 45.0
+
+    def test_search_falls_back_to_15s_default_when_unconfigured(self, monkeypatch):
+        monkeypatch.setenv("SEARXNG_URL", "http://localhost:8080")
+        from plugins.web.searxng.provider import SearXNGWebSearchProvider
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"results": []}
+        mock_resp.raise_for_status = MagicMock()
+
+        captured = {}
+        def capture_get(url, **kwargs):
+            captured.update(kwargs)
+            return mock_resp
+
+        with patch("tools.web_tools._load_web_config", return_value={}), \
+             patch("httpx.get", side_effect=capture_get):
+            SearXNGWebSearchProvider().search("query", limit=5)
+
+        assert captured["timeout"] == 15.0
+
+
+# ---------------------------------------------------------------------------
 # Integration: _is_backend_available recognizes "searxng"
 # ---------------------------------------------------------------------------
 

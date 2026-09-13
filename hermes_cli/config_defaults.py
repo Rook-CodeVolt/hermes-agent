@@ -519,6 +519,13 @@ DEFAULT_CONFIG = {
         "search_backend": "",    # per-capability override for web_search (e.g. "searxng")
         "extract_backend": "",   # per-capability override for web_extract (e.g. "native")
         "extract_char_limit": 15000,  # per-page char budget for web_extract; larger pages truncate + store full text in cache/web
+        # HTTP timeout (seconds) for SearXNG search requests. Self-hosted
+        # instances that fan out to many upstream engines can need more than
+        # the historical hardcoded 15s. Must be a finite positive number;
+        # any other value (missing, non-numeric, zero, negative, NaN/inf)
+        # falls back to this same 15s default — see
+        # plugins/web/searxng/provider.py::_get_searxng_timeout.
+        "searxng_timeout": 15,
         # Keyless free-tier ring: with NO web backend configured or keyed,
         # web_search/web_extract rotate round-robin across five vendors'
         # public free tiers (exa, parallel, tavily, firecrawl, keenable),

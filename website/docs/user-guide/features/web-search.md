@@ -242,6 +242,22 @@ web:
 
 Or set via `hermes tools` → Web Search & Extract → SearXNG.
 
+#### Configuring the search timeout
+
+SearXNG fans a single search out to every engine it's configured with, so a broad self-hosted instance (many engines, no aggressive per-engine caps) can legitimately take longer than a narrowly-tuned public instance. The HTTP timeout for SearXNG search requests is configurable via `web.searxng_timeout` in `config.yaml`:
+
+```yaml
+# ~/.hermes/config.yaml
+web:
+  search_backend: "searxng"
+  searxng_timeout: 45   # seconds — default 15 when unset
+```
+
+- **Units:** seconds (accepts int or float, e.g. `45` or `30.5`).
+- **Default:** `15` — unchanged from prior versions when the key is absent.
+- **Precedence:** `config.yaml`'s `web.searxng_timeout` is the only settings surface (no `SEARXNG_TIMEOUT` env var) — non-secret behavioral settings live in `config.yaml` per this repository's configuration convention, matching `web.extract_char_limit`.
+- **Validation:** the value must be a finite positive number. An unset, non-numeric, zero, negative, `NaN`, or infinite value falls back to the 15-second default and logs a warning — it never disables search or raises.
+
 ---
 
 #### Option B — Use a public instance
