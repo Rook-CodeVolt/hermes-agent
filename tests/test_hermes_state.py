@@ -5,6 +5,8 @@ import re
 import sqlite3
 import time
 import json
+import os
+import stat
 import threading
 from pathlib import Path
 from unittest import mock
@@ -119,6 +121,85 @@ def _no_fts_rebuild_throttle(monkeypatch):
 
 
 class TestConnectionLifecycle:
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_writable_state_db_is_owner_only_under_permissive_umask(self, tmp_path):
+        """state.db and any live SQLite sidecars must not inherit 0644 modes."""
+        db_path = tmp_path / "state.db"
+
+        old_umask = os.umask(0o022)
+        try:
+            session_db = SessionDB(db_path=db_path)
+        finally:
+            os.umask(old_umask)
+
+        try:
+            state_files = [
+                path
+                for path in (
+                    db_path,
+                    db_path.with_name(db_path.name + "-wal"),
+                    db_path.with_name(db_path.name + "-shm"),
+                )
+                if path.exists()
+            ]
+            assert state_files
+            assert all(
+                stat.S_IMODE(path.stat().st_mode) == 0o600
+                for path in state_files
+            )
+        finally:
+            session_db.close()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_writable_state_db_tightens_existing_loose_mode(self, tmp_path):
+        """Opening a legacy 0644 profile store repairs it in place."""
+        db_path = tmp_path / "state.db"
+        initial = SessionDB(db_path=db_path)
+        initial.close()
+        os.chmod(db_path, 0o644)
+
+        session_db = SessionDB(db_path=db_path)
+        try:
+            assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
+        finally:
+            session_db.close()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX fcntl locks")
+    def test_writable_state_db_keeps_locks_across_second_open(self, tmp_path):
+        """Opening a second SessionDB in this process must not unlink live sidecars.
+
+        POSIX locks are owned per (process, inode): closing any descriptor for
+        state.db drops every lock this process holds on it, including the locks
+        of the first SessionDB's connection. A sibling process reading the
+        database after that close takes the shared-memory DMS exclusively on its
+        own close, checkpoints, and unlinks -wal/-shm while the first handle
+        keeps using the deleted inodes.
+        """
+        import subprocess
+        import sys
+
+        from hermes_state_dbfile import iter_deleted_sqlite_sidecar_holders
+
+        db_path = tmp_path / "state.db"
+        first = SessionDB(db_path=db_path)
+        second = SessionDB(db_path=db_path)
+        try:
+            assert not iter_deleted_sqlite_sidecar_holders(db_path)
+            subprocess.run(
+                [sys.executable, "-c",
+                 "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); "
+                 "c.execute('SELECT count(*) FROM sessions').fetchone(); c.close()",
+                 str(db_path)],
+                check=True, timeout=30,
+            )
+            assert not iter_deleted_sqlite_sidecar_holders(db_path), (
+                "a second SessionDB open or a sibling reader unlinked the live "
+                "WAL/SHM inodes out from under this process"
+            )
+        finally:
+            second.close()
+            first.close()
+
     def test_failed_writable_open_does_not_leak_tracked_connection(
         self, tmp_path, monkeypatch
     ):
