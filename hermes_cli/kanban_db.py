@@ -194,7 +194,7 @@ def _descends_from_live_dispatcher_worker(conn: Optional[sqlite3.Connection] = N
 
 
 def _assert_not_delegated_child_mutation(
-    conn: Optional[sqlite3.Connection] = None,
+    conn: Optional[sqlite3.Connection] = None, *, task_id: Optional[str] = None,
 ) -> None:
     """Reject Kanban mutation without dispatcher-owned process authority.
 
@@ -210,6 +210,15 @@ def _assert_not_delegated_child_mutation(
     ``delegate_task`` child can never obtain one because minting reads this
     process's own suppressed/absent binding, not anything the child's shell
     command text can influence.
+
+    ``task_id``, when the caller can name the single task this mutation
+    targets, scopes subprocess-credential acceptance to a credential minted
+    for that EXACT task -- closing the cross-task bearer-token replay found
+    in commit b40b5669b0 (a credential minted for worker-on-task-A's own
+    subprocess otherwise authorised mutating an unrelated task B on the same
+    board). Callers with no single mutation target (board administration,
+    task creation) pass no ``task_id`` and get the pre-existing
+    token+expiry(+board) check only.
 
     The marker and process-ancestry checks are denial-only defence in depth.
     The marker is forgeable/removable; ancestry is bypassable by detaching.
@@ -228,7 +237,9 @@ def _assert_not_delegated_child_mutation(
                 raise PermissionError(f"dispatcher worker identity is no longer valid: {reason}")
             return
         credential = os.environ.get(dispatcher_identity.SUBPROCESS_CREDENTIAL_ENV)
-        if credential and dispatcher_identity.validate_subprocess_credential(credential, conn):
+        if credential and dispatcher_identity.validate_subprocess_credential(
+            credential, conn, task_id=task_id
+        ):
             return
     except PermissionError:
         raise
@@ -1653,7 +1664,7 @@ def list_tasks(
 def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) -> bool:
     """Assign/reassign; raises RuntimeError while the task is running under a claim."""
     profile = _canonical_assignee(profile)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         row = conn.execute(
             "SELECT status, claim_lock, assignee FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
@@ -1699,7 +1710,7 @@ def _set_task_override(
 ) -> bool:
     """Per-task override write: refuse archived tasks, record ``event_kind``,
     then fire the task-updated observer AFTER commit (RFC #58548)."""
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         status = _task_status(conn, task_id)
         if status is None:
             return False
@@ -1728,7 +1739,7 @@ def set_reasoning_effort(conn: sqlite3.Connection, task_id: str, effort: Optiona
 def link_tasks(conn: sqlite3.Connection, parent_id: str, child_id: str) -> None:
     if parent_id == child_id:
         raise ValueError("a task cannot depend on itself")
-    with write_txn(conn):
+    with write_txn(conn, task_id=child_id):
         missing = _missing_task_ids(conn, [parent_id, child_id])
         if missing:
             raise ValueError(f"unknown task(s): {', '.join(missing)}")
@@ -1765,7 +1776,7 @@ def _would_cycle(conn: sqlite3.Connection, parent_id: str, child_id: str) -> boo
 
 
 def unlink_tasks(conn: sqlite3.Connection, parent_id: str, child_id: str) -> bool:
-    with write_txn(conn):
+    with write_txn(conn, task_id=child_id):
         cur = conn.execute(
             "DELETE FROM task_links WHERE parent_id = ? AND child_id = ?", (parent_id, child_id),
         )
@@ -1832,7 +1843,7 @@ def add_comment(conn: sqlite3.Connection, task_id: str, author: str, body: str) 
     now = int(time.time())
     # ``allow_nested=True``: graph builders (kanban_swarm blackboard seeding)
     # compose comment writes under one outer commit.
-    with write_txn(conn, allow_nested=True):
+    with write_txn(conn, allow_nested=True, task_id=task_id):
         _require_task(conn, task_id)
         cur = conn.execute(
             "INSERT INTO task_comments (task_id, author, body, created_at) "
@@ -1940,7 +1951,7 @@ def add_attachment(
     if not stored_path or not stored_path.strip():
         raise ValueError("attachment stored_path is required")
     now = int(time.time())
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         _require_task(conn, task_id)
         cur = conn.execute(
             "INSERT INTO task_attachments "
@@ -1966,7 +1977,10 @@ def get_attachment(conn: sqlite3.Connection, attachment_id: int) -> Optional[Att
 
 def delete_attachment(conn: sqlite3.Connection, attachment_id: int) -> Optional[Attachment]:
     """Delete the row (source of truth) and best-effort its blob; None when no row matched."""
-    with write_txn(conn):
+    att = get_attachment(conn, attachment_id)
+    if att is None:
+        return None
+    with write_txn(conn, task_id=att.task_id):
         att = get_attachment(conn, attachment_id)
         if att is None:
             return None
@@ -2292,7 +2306,7 @@ def claim_task(
     now = int(time.time())
     lock = claimer or _claimer_id()
     expires = now + _resolve_claim_ttl_seconds(ttl_seconds)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         # Single enforcement point: never ready -> running with an undone
         # parent, whichever writer set 'ready'. Demote to 'todo';
         # recompute_ready re-promotes when the parents finish.
@@ -2325,7 +2339,7 @@ def claim_review_task(
     now = int(time.time())
     lock = claimer or _claimer_id()
     expires = now + _resolve_claim_ttl_seconds(ttl_seconds)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         if not _parents_satisfied(conn, task_id):
             demoted = conn.execute(
                 "UPDATE tasks SET status = 'todo' "
@@ -2407,7 +2421,7 @@ def heartbeat_claim(
     """Extend a running claim; True if we still own it."""
     expires = int(time.time()) + _resolve_claim_ttl_seconds(ttl_seconds)
     lock = claimer or _claimer_id()
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         cur = conn.execute(
             "UPDATE tasks SET claim_expires = ? "
             "WHERE id = ? AND status = 'running' AND claim_lock = ?", (expires, task_id, lock),
@@ -2477,7 +2491,7 @@ def release_stale_claims(conn: sqlite3.Connection, *, signal_fn=None) -> int:
                 reason="ttl_expired_worker_alive",
             )
             continue
-        with write_txn(conn):
+        with write_txn(conn, task_id=row["id"]):
             retry_status = _retry_status_for_run(conn, row["id"])
             cur = conn.execute(
                 "UPDATE tasks SET status = ?, claim_lock = NULL, "
@@ -2531,7 +2545,7 @@ def _extend_live_stale_claim(conn: sqlite3.Connection, row: sqlite3.Row, now: in
     reclaiming (``claim_extended`` event). CAS on the same expired lock so a
     concurrent reclaimer wins cleanly."""
     new_expires = now + _resolve_claim_ttl_seconds()
-    with write_txn(conn):
+    with write_txn(conn, task_id=row["id"]):
         cur = conn.execute(
             "UPDATE tasks SET claim_expires = ? "
             "WHERE id = ? AND status = 'running' "
@@ -2571,7 +2585,7 @@ def reclaim_task(
         return False
     prev_lock = row["claim_lock"]
     termination = _terminate_reclaimed_worker(row["worker_pid"], prev_lock, signal_fn=signal_fn)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         retry_status = _retry_status_for_run(conn, task_id)
         cur = conn.execute(
             "UPDATE tasks SET status = ?, claim_lock = NULL, "
@@ -2704,7 +2718,7 @@ def complete_task(
         conn, task_id, metadata, summary=summary, result=result,
     )
     handoff_summary = summary if summary is not None else result
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         # Hard invariant even for human review approval: a parent may have
         # reopened while this task waited.
         if not _parents_satisfied(conn, task_id):
@@ -2776,7 +2790,7 @@ def _gate_created_cards(
         return []
     verified_cards, phantom_cards = _verify_created_cards(conn, task_id, created_cards)
     if phantom_cards:
-        with write_txn(conn):
+        with write_txn(conn, task_id=task_id):
             _append_event(
                 conn, task_id, "completion_blocked_hallucination",
                 {
@@ -2839,7 +2853,7 @@ def _flag_phantom_prose_refs(
         return
     phantom_refs = [p for p in _scan_prose_for_phantom_ids(conn, scan_text) if p not in set(verified_cards)]
     if phantom_refs:
-        with write_txn(conn):
+        with write_txn(conn, task_id=task_id):
             _append_event(
                 conn, task_id, "suspected_hallucinated_references",
                 {"phantom_refs": phantom_refs, "source": "completion_summary"}, run_id=run_id,
@@ -3012,7 +3026,7 @@ def edit_completed_task_result(
 ) -> bool:
     """Backfill the user-visible result for an already completed task."""
     handoff_summary = summary if summary is not None else result
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         if _task_status(conn, task_id) != "done":
             return False
         conn.execute("UPDATE tasks SET result = ? WHERE id = ?", (result, task_id))
@@ -3059,7 +3073,7 @@ def block_task(
     so a forever-flaky task escalates. True on any transition."""
     if kind is not None and kind not in VALID_BLOCK_KINDS:
         raise ValueError(f"block kind must be one of {sorted(VALID_BLOCK_KINDS)} or None")
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         cur_row = conn.execute(
             "SELECT status, block_kind, block_recurrences FROM tasks WHERE id = ?", (task_id,),
         ).fetchone()
@@ -3160,7 +3174,7 @@ def request_review(
 
     summary = redact_review_value(summary)
     metadata = redact_review_value(metadata)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         if not _parents_satisfied(conn, task_id):
             return _ret(False, "parent dependencies are not satisfied")
         trow = conn.execute(
@@ -3263,7 +3277,7 @@ def request_changes(
     if not reason:
         return False, "reason is required"
 
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         task_row = conn.execute(
             "SELECT status, assignee, current_run_id FROM tasks WHERE id = ?", (task_id,),
         ).fetchone()
@@ -3356,7 +3370,7 @@ def promote_task(
     if dry_run:
         return True, None
 
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         upd = conn.execute(
             "UPDATE tasks SET status = 'ready' "
             "WHERE id = ? AND status IN ('todo', 'blocked')", (task_id,),
@@ -3404,7 +3418,7 @@ def unblock_task(conn: sqlite3.Connection, task_id: str) -> bool:
     """``blocked``/``scheduled`` -> its resumable phase (parent re-gated; ``review``
     when that is where it left off), closing any leaked run first."""
     now = int(time.time())
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         resume_status = (
             _resume_status_from_events(conn, task_id)
             if _task_status(conn, task_id) == "blocked"
@@ -3450,7 +3464,7 @@ def reopen_review_task(conn: sqlite3.Connection, task_id: str) -> bool:
     Preserves ``consecutive_failures`` and the block loop counter (review is
     not a block; only :func:`complete_task` clears them)."""
     now = int(time.time())
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         _reclaim_dangling_run(
             conn, task_id, statuses=("review",), now=now,
             note="invariant recovery on review reopen",
@@ -3503,7 +3517,7 @@ def invalidate_descendants_for_parent_reopen(
     now = int(time.time())
     invalidated: list[dict[str, Any]] = []
     terminations: list[tuple[Optional[int], Optional[str]]] = []
-    with write_txn(conn, allow_nested=True):
+    with write_txn(conn, allow_nested=True, task_id=task_id):
         rows = conn.execute(
             """
             WITH RECURSIVE descendants(id) AS (
@@ -3586,7 +3600,7 @@ def specify_triage_task(
     if title is not None and not title.strip():
         raise ValueError("title cannot be blank")
     assignee = _canonical_assignee(assignee)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         existing = conn.execute(
             "SELECT title, body, assignee FROM tasks WHERE id = ? AND status = 'triage'",
             (task_id,),
@@ -3689,7 +3703,7 @@ def decompose_triage_task(
     # ONE txn so the fan-out is atomic; helpers that open their own write_txn
     # (create_task, link_tasks, add_comment) must not be called in here.
     now = int(time.time())
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         root_row = conn.execute(
             "SELECT id, status, tenant, workspace_kind, workspace_path "
             "FROM tasks WHERE id = ?", (task_id,),
@@ -3780,7 +3794,7 @@ def _insert_decomposed_child(
 
 
 def archive_task(conn: sqlite3.Connection, task_id: str) -> bool:
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         cur = conn.execute(
             "UPDATE tasks SET status = 'archived', "
             "    claim_lock = NULL, claim_expires = NULL, worker_pid = NULL "
@@ -3811,7 +3825,7 @@ def _delete_task_relations(conn: sqlite3.Connection, task_id: str) -> None:
 def delete_archived_task(conn: sqlite3.Connection, task_id: str) -> bool:
     """Hard-delete an ARCHIVED task (+ related rows); anything else must be
     archived first so data loss takes two deliberate actions."""
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         if _task_status(conn, task_id) != "archived":
             return False
         _delete_task_relations(conn, task_id)
@@ -3821,7 +3835,7 @@ def delete_archived_task(conn: sqlite3.Connection, task_id: str) -> bool:
 
 def delete_task(conn: sqlite3.Connection, task_id: str) -> bool:
     """Hard-delete a task and its related rows in one txn; False when not found."""
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         if cur.rowcount != 1:
             return False
@@ -3836,7 +3850,7 @@ def schedule_task(
 ) -> bool:
     """Park in ``scheduled`` (waiting on time, not a human; not dispatchable)
     until ``unblock_task`` re-gates it."""
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         params: list[Any] = [task_id]
         sql = """
             UPDATE tasks

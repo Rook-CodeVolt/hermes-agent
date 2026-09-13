@@ -1132,9 +1132,17 @@ def _execute_boundary_with_retry(conn: sqlite3.Connection, sql: str) -> None:
 
 
 @contextlib.contextmanager
-def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
+def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False, task_id: Optional[str] = None):
     """IMMEDIATE write transaction; a claim CAS inside is atomic — at most one
     concurrent writer succeeds.
+
+    ``task_id``: when the caller can name the single task this transaction
+    mutates, it is threaded into the subprocess-credential scoping check
+    (:func:`hermes_cli.kanban_db._assert_not_delegated_child_mutation`) so a
+    credential minted for a DIFFERENT task cannot authorise this write.
+    Callers that mutate no single named task (board administration, task
+    creation) omit it and fall back to the pre-existing token+expiry(+board)
+    check.
 
     Nesting is an explicit opt-in (``allow_nested=True`` → savepoint; otherwise
     a loud ``RuntimeError``). Only composition primitives (``create_task``,
@@ -1142,7 +1150,7 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
     (``complete_task`` & co.) must never run under an open outer transaction,
     since those side effects would fire while the outer txn can still roll back.
     """
-    _kb._assert_not_delegated_child_mutation(conn)
+    _kb._assert_not_delegated_child_mutation(conn, task_id=task_id)
     if getattr(conn, "in_transaction", False):
         if not allow_nested:
             raise RuntimeError(
