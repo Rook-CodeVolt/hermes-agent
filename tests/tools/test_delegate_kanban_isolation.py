@@ -53,7 +53,7 @@ def _make_running_kanban_task(monkeypatch, tmp_path):
         )
         claim = kb.claim_task(conn, tid)
         assert claim is not None
-        run_id = claim.id
+        run_id = claim.current_run_id
     finally:
         conn.close()
 
@@ -231,6 +231,115 @@ def test_real_cli_rejects_free_form_author_spoof(monkeypatch, tmp_path):
     assert result.returncode == 2, result.stdout
     assert "unrecognized arguments: --author maya" in result.stdout
     from hermes_cli import kanban_db_connect as kbc
+    with kbc.connect_closing() as conn:
+        assert kb.list_comments(conn, tid) == []
+
+
+def _bind_current_process_as_worker(kb, tid, run_id, workspace, db_path):
+    """Mint + consume a real worker identity for THIS test process, exactly as
+    a real dispatcher worker would have it bound at startup."""
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+    from hermes_cli import kanban_db_identity as kbi
+
+    with kbc.connect_closing(db_path=Path(db_path)) as conn:
+        token = kbi.issue_worker_identity(
+            conn, task_id=tid, run_id=run_id, workspace_path=str(workspace), worker_pid=os.getpid(),
+        )
+    return di.bind_token(token, db_path=str(db_path))
+
+
+def test_worker_own_terminal_subprocess_mutation_succeeds_with_no_delegation_markers(
+    monkeypatch, tmp_path,
+):
+    """The primary supported worker-mutation path: a real dispatcher worker's
+    own ``terminal`` tool shelling out to ``hermes kanban ...`` must still be
+    able to mutate its own task, even though the subprocess inherits no
+    ContextVar, no delegation marker and no consumable handshake token (that
+    was already single-use-consumed at the worker's own startup).
+
+    This is the missing counterpart to
+    ``test_real_cli_marker_strip_still_cannot_mutate_from_worker_descendant``,
+    which only proves the (correct) denial half. Regression coverage for the
+    fix that closes Maya's changes-requested finding on commit 4be3d28601.
+    """
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+
+    kb, tid, workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    db_path = str(kb.kanban_db_path())
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+        run_id = conn.execute(
+            "SELECT current_run_id FROM tasks WHERE id = ?", (tid,)
+        ).fetchone()["current_run_id"]
+
+    di.reset_for_tests()
+    try:
+        _bind_current_process_as_worker(kb, tid, int(run_id), workspace, db_path)
+
+        env = os.environ.copy()
+        env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+        env.pop("HERMES_KANBAN_TASK", None)
+        env.pop("HERMES_KANBAN_RUN_ID", None)
+        env.pop(di.HANDSHAKE_FD_ENV, None)
+        env["PYTHONPATH"] = str(_REPO_ROOT)
+
+        # The exact production call: LocalEnvironment._finalize_child_env is
+        # what every terminal-tool subprocess spawn runs through.
+        from tools.environments.local import _finalize_child_env
+        env = _finalize_child_env(env)
+
+        assert di.SUBPROCESS_CREDENTIAL_ENV in env, (
+            "a worker with a live identity binding must mint a subprocess "
+            "credential for its own terminal-tool child"
+        )
+
+        result = _kanban_cli("comment", tid, "allowed", env=env)
+    finally:
+        di.reset_for_tests()
+
+    assert result.returncode == 0, result.stdout
+    with kbc.connect_closing() as conn:
+        comments = kb.list_comments(conn, tid)
+    assert [c.body for c in comments] == ["allowed"]
+
+
+def test_delegate_task_child_cannot_mint_or_forge_subprocess_credential(monkeypatch, tmp_path):
+    """The original abuse case must still fail closed after the fix: a
+    delegate_task child inherits no dispatcher identity, so it can neither
+    mint a real subprocess credential nor have one injected for it, and a
+    hand-forged value in the credential env var must not validate."""
+    from agent import dispatcher_identity as di
+    from agent.delegation_context import delegated_child_context
+
+    kb, tid, _workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    from hermes_cli import kanban_db_connect as kbc
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+
+    di.reset_for_tests()
+    try:
+        with delegated_child_context():
+            assert di.mint_subprocess_credential() is None
+
+        env = os.environ.copy()
+        env.pop("HERMES_KANBAN_TASK", None)
+        env.pop("HERMES_KANBAN_RUN_ID", None)
+        env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+        env["PYTHONPATH"] = str(_REPO_ROOT)
+        env[di.SUBPROCESS_CREDENTIAL_ENV] = "0" * 64  # forged, never issued by any DB
+
+        result = _kanban_cli("comment", tid, "forbidden", env=env)
+    finally:
+        di.reset_for_tests()
+
+    assert result.returncode == 1, result.stdout
+    assert "delegate_task child contexts cannot mutate Kanban" in result.stdout
     with kbc.connect_closing() as conn:
         assert kb.list_comments(conn, tid) == []
 
