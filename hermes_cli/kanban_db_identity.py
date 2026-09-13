@@ -152,13 +152,29 @@ def issue_subprocess_credential(
 
 
 def find_valid_subprocess_credential(
-    conn: sqlite3.Connection, token_sha256: str
+    conn: sqlite3.Connection, token_sha256: str, *, task_id: Optional[str] = None
 ) -> Optional[sqlite3.Row]:
     """Return the matching, unexpired credential row, or ``None``.
 
     Read-only and repeatable: presenting the same credential from several
     descendants of one compound shell command must succeed every time.
+
+    ``task_id``, when given, scopes the lookup to a credential minted for
+    that EXACT task -- closing the cross-task bearer-token replay Maya
+    found in commit b40b5669b0 (a credential minted for worker-on-task-A's
+    own subprocess could otherwise mutate an unrelated task B on the same
+    board). Callers with no single mutation target (task creation, board
+    administration) pass ``task_id=None`` and get the pre-existing
+    token+expiry check only; :func:`agent.dispatcher_identity.validate_subprocess_credential`
+    layers an additional run-liveness check on top of every result this
+    returns, targeted or not.
     """
+    if task_id is not None:
+        return conn.execute(
+            "SELECT * FROM worker_subprocess_credentials "
+            "WHERE token_sha256 = ? AND expires_at >= ? AND task_id = ?",
+            (token_sha256, int(time.time()), str(task_id)),
+        ).fetchone()
     return conn.execute(
         "SELECT * FROM worker_subprocess_credentials "
         "WHERE token_sha256 = ? AND expires_at >= ?",

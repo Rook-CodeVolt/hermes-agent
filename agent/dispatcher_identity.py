@@ -70,7 +70,7 @@ SUBPROCESS_CREDENTIAL_ENV = "HERMES_WORKER_SUBPROCESS_CREDENTIAL"
 # remains presentable, limiting the window for the documented residual risk
 # (the top-level agent could, in principle, persist the value itself and a
 # later delegate_task subprocess replay it within that window).
-SUBPROCESS_CREDENTIAL_TTL_SECONDS = 600
+SUBPROCESS_CREDENTIAL_TTL_SECONDS = 120
 
 # How long the child waits for the dispatcher to finish minting its row.
 # The dispatcher writes immediately after Popen returns, so this only ever
@@ -626,21 +626,37 @@ def mint_subprocess_credential(
 
 
 def validate_subprocess_credential(
-    token: str, conn: "Any | None" = None
+    token: str, conn: "Any | None" = None, *, task_id: "str | None" = None
 ) -> bool:
     """Whether *token* is a live, DB-recorded worker subprocess credential.
 
     *conn* -- when the caller already holds a connection to the DB it is
-    about to write to (the normal ``write_txn`` case) -- is checked first, so
-    an ordinary mutation never opens a second connection to the very database
-    it is guarding: :func:`hermes_cli.kanban_db_connect.connect_closing`
+    about to write to (the normal ``write_txn`` case) -- is checked FIRST
+    and, when given, EXCLUSIVELY: :func:`hermes_cli.kanban_db_connect.connect_closing`
     re-enters ``_init_if_needed``'s cross-process init lock, which is not
-    reentrant across separate file descriptors even within one process and
-    would otherwise make a plain guard check block for up to the init-lock
-    timeout on every call. Only read-only, lock-free probe connections are
-    opened for any OTHER known board, mirroring
-    :func:`_descends_from_live_dispatcher_worker`'s pattern; the digest plus
-    expiry are the only trust boundary, matching :func:`token_digest`.
+    reentrant across separate file descriptors even within one process, so
+    opening a second connection here would risk deadlocking every guarded
+    write. More importantly, a caller that passes its own board's ``conn``
+    has already told us which board is authoritative for this call; probing
+    every OTHER known board's file after a miss there would let a credential
+    minted on board A validate against a completely unrelated board B just
+    because some third board C's DB file happens to contain a live row for
+    the same token digest (fixed regression: Maya's independent review of
+    b40b5669b0 reproduced exactly this using two real board files). The
+    multi-board probe is retained ONLY for the ``conn is None`` case (board
+    administration calls like ``set_current_board`` that hold no DB
+    connection of their own to begin with, so there is no "wrong board" to
+    accidentally widen past).
+
+    *task_id* -- when the caller can name the single task this call is
+    about to mutate, the credential row must have been minted for that
+    EXACT task, closing the cross-task replay Maya reproduced (a credential
+    minted for worker-on-task-A's own subprocess otherwise authorised
+    mutating an unrelated task B on the same board). Callers with no single
+    mutation target (task creation, per-board administration, batch
+    dispatcher sweeps) pass ``task_id=None`` and get the token+expiry(+board)
+    check only -- this is strictly narrower than a plain bearer token, never
+    wider than before this fix.
     """
     if not isinstance(token, str) or not token.strip():
         return False
@@ -651,10 +667,11 @@ def validate_subprocess_credential(
 
     if conn is not None:
         try:
-            if kanban_db_identity.find_valid_subprocess_credential(conn, digest) is not None:
-                return True
+            row = kanban_db_identity.find_valid_subprocess_credential(conn, digest, task_id=task_id)
         except Exception as exc:
             _log.debug("could not validate worker subprocess credential against the open connection: %s", exc)
+            return False
+        return row is not None
 
     import sqlite3
 
@@ -665,7 +682,7 @@ def validate_subprocess_credential(
             probe = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             probe.row_factory = sqlite3.Row
             try:
-                if kanban_db_identity.find_valid_subprocess_credential(probe, digest) is not None:
+                if kanban_db_identity.find_valid_subprocess_credential(probe, digest, task_id=task_id) is not None:
                     return True
             finally:
                 probe.close()
