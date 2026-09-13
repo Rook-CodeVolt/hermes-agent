@@ -626,7 +626,11 @@ def mint_subprocess_credential(
 
 
 def validate_subprocess_credential(
-    token: str, conn: "Any | None" = None, *, task_id: "str | None" = None
+    token: str,
+    conn: "Any | None" = None,
+    *,
+    task_id: "str | None" = None,
+    board: "str | None" = None,
 ) -> bool:
     """Whether *token* is a live, DB-recorded worker subprocess credential.
 
@@ -642,11 +646,30 @@ def validate_subprocess_credential(
     minted on board A validate against a completely unrelated board B just
     because some third board C's DB file happens to contain a live row for
     the same token digest (fixed regression: Maya's independent review of
-    b40b5669b0 reproduced exactly this using two real board files). The
-    multi-board probe is retained ONLY for the ``conn is None`` case (board
-    administration calls like ``set_current_board`` that hold no DB
-    connection of their own to begin with, so there is no "wrong board" to
-    accidentally widen past).
+    b40b5669b0 reproduced exactly this using two real board files).
+
+    *board* -- for callers with no open ``conn`` of their own (board
+    administration: ``set_current_board``, ``clear_current_board``,
+    ``write_board_metadata``, ``remove_board``) but which DO have an exact
+    target board slug (the board being switched to / archived / deleted /
+    whose metadata is being written), this scopes the check to ONLY that
+    board's own DB file -- exactly the same "one authoritative board, no
+    fallback" behaviour as the ``conn is not None`` branch, just resolved
+    from a slug instead of an already-open connection. This closes the
+    cross-board admin-authority bypass Maya found in a fresh review of
+    d977234b54: a credential minted while working on board A must not
+    authorise ``remove_board``/``write_board_metadata``/etc. against an
+    unrelated board B just because board B's DB file happens to be probed.
+    A missing/unreadable target board file fails closed (no credential can
+    validate against a board that isn't there to hold one).
+
+    *conn is None and board is None* -- no caller in this codebase invokes
+    the check this way (every board-admin call site now supplies ``board``;
+    every task-mutating call site supplies ``conn``). There is no
+    remaining legitimate use for a global multi-board probe, so this
+    combination now fails closed rather than scanning every known board's
+    DB file for a matching token -- that scan was the exact mechanism of
+    the cross-board admin-authority bypass this fixes.
 
     *task_id* -- when the caller can name the single task this call is
     about to mutate, the credential row must have been minted for that
@@ -673,20 +696,26 @@ def validate_subprocess_credential(
             return False
         return row is not None
 
-    import sqlite3
+    if board is not None:
+        import sqlite3
 
-    for path in kanban_db._candidate_kanban_dbs():
+        try:
+            path = kanban_db.kanban_db_path(board=board)
+        except Exception as exc:
+            _log.debug("could not resolve target board %r for subprocess credential check: %s", board, exc)
+            return False
         if not path.is_file():
-            continue
+            return False
         try:
             probe = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             probe.row_factory = sqlite3.Row
             try:
-                if kanban_db_identity.find_valid_subprocess_credential(probe, digest, task_id=task_id) is not None:
-                    return True
+                row = kanban_db_identity.find_valid_subprocess_credential(probe, digest, task_id=task_id)
             finally:
                 probe.close()
         except Exception as exc:
-            _log.debug("could not validate worker subprocess credential against %s: %s", path, exc)
-            continue
+            _log.debug("could not validate worker subprocess credential against target board %r (%s): %s", board, path, exc)
+            return False
+        return row is not None
+
     return False

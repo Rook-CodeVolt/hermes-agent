@@ -195,6 +195,7 @@ def _descends_from_live_dispatcher_worker(conn: Optional[sqlite3.Connection] = N
 
 def _assert_not_delegated_child_mutation(
     conn: Optional[sqlite3.Connection] = None, *, task_id: Optional[str] = None,
+    board: Optional[str] = None,
 ) -> None:
     """Reject Kanban mutation without dispatcher-owned process authority.
 
@@ -217,8 +218,20 @@ def _assert_not_delegated_child_mutation(
     in commit b40b5669b0 (a credential minted for worker-on-task-A's own
     subprocess otherwise authorised mutating an unrelated task B on the same
     board). Callers with no single mutation target (board administration,
-    task creation) pass no ``task_id`` and get the pre-existing
-    token+expiry(+board) check only.
+    task creation) pass no ``task_id``.
+
+    ``board``, when the caller is a board-administration call site with no
+    ``conn`` of its own (``set_current_board``, ``clear_current_board``,
+    ``write_board_metadata``, ``remove_board``) but DOES have an exact
+    target board slug, scopes subprocess-credential acceptance to a
+    credential minted for that EXACT board -- closing the cross-board
+    admin-authority bypass Maya found in a fresh review of d977234b54 (a
+    credential minted on board A otherwise authorised ``remove_board``/etc.
+    against an unrelated board B, via the retained ``conn is None``
+    multi-board fallback). Every board-admin call site below now supplies
+    its own target slug; there is no remaining call site that supplies
+    neither ``conn`` nor ``board``, so that combination fails closed in
+    :func:`agent.dispatcher_identity.validate_subprocess_credential`.
 
     The marker and process-ancestry checks are denial-only defence in depth.
     The marker is forgeable/removable; ancestry is bypassable by detaching.
@@ -238,7 +251,7 @@ def _assert_not_delegated_child_mutation(
             return
         credential = os.environ.get(dispatcher_identity.SUBPROCESS_CREDENTIAL_ENV)
         if credential and dispatcher_identity.validate_subprocess_credential(
-            credential, conn, task_id=task_id
+            credential, conn, task_id=task_id, board=board
         ):
             return
     except PermissionError:
@@ -554,7 +567,14 @@ def get_current_board() -> str:
 def set_current_board(slug: str) -> Path:
     """Persist ``slug`` as the active board; returns the file written. Does NOT
     check the board exists — callers do (so ``boards switch <typo>`` errors)."""
-    _assert_not_delegated_child_mutation()
+    # Scope the subprocess-credential check to the board being switched TO,
+    # tolerating an un-normalizable slug (the normalization/existence error
+    # itself is raised below by _require_slug, after the authority check).
+    try:
+        _target_board = _normalize_board_slug(slug)
+    except ValueError:
+        _target_board = None
+    _assert_not_delegated_child_mutation(board=_target_board)
     normed = _require_slug(slug)
     path = current_board_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -564,7 +584,8 @@ def set_current_board(slug: str) -> Path:
 
 def clear_current_board() -> None:
     """Remove ``<root>/kanban/current`` so the active board reverts to ``default``."""
-    _assert_not_delegated_child_mutation()
+    # Reverting to "default" is the exact effective target of this mutation.
+    _assert_not_delegated_child_mutation(board=DEFAULT_BOARD)
     with contextlib.suppress(FileNotFoundError):
         current_board_path().unlink()
 
@@ -684,8 +705,12 @@ def write_board_metadata(
     """Create/update ``board.json``; unmentioned fields are preserved, ``created_at``
     set on first write. ``project_id``/``default_workdir``: ``None`` = unchanged,
     "" = clear (``project_id`` is not validated here)."""
-    _assert_not_delegated_child_mutation()
-    slug = _slug_or_default(board)
+    try:
+        slug = _slug_or_default(board)
+    except ValueError:
+        _assert_not_delegated_child_mutation(board=None)
+        raise
+    _assert_not_delegated_child_mutation(board=slug)
     meta = read_board_metadata(slug)
     # db_path is derived on every read; never persist it into board.json.
     meta.pop("db_path", None)
@@ -753,7 +778,11 @@ def list_boards(*, include_archived: bool = True) -> list[dict]:
 def remove_board(slug: str, *, archive: bool = True) -> dict:
     """Archive (to ``boards/_archived/<slug>-<ts>/``) or delete a board;
     ``default`` cannot be removed. Returns ``{"slug", "action", "new_path"}``."""
-    _assert_not_delegated_child_mutation()
+    try:
+        _target_board = _normalize_board_slug(slug)
+    except ValueError:
+        _target_board = None
+    _assert_not_delegated_child_mutation(board=_target_board)
     normed = _require_slug(slug)
     if normed == DEFAULT_BOARD:
         raise ValueError("the 'default' board cannot be removed")
