@@ -267,6 +267,19 @@ def _model_json(model: Any) -> dict:
     return model.model_dump(mode="json", exclude_none=True)
 
 
+def _flock(fh, *, lock: bool) -> None:
+    """Exclusive whole-file lock/unlock on *fh* (fcntl on POSIX, msvcrt on Windows). Same
+    cross-platform shape as ``hermes_cli.active_sessions._flock``, duplicated rather than
+    imported: tools/ must not depend on hermes_cli/ (see tools/AGENTS.md layering)."""
+    if os.name == "nt":
+        import msvcrt
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK if lock else msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX if lock else fcntl.LOCK_UN)
+
+
 class HermesTokenStorage:
     """Persist OAuth state as ``HERMES_HOME/mcp-tokens/<server_name>`` + ``.json`` (tokens),
     ``.client.json`` (client info), ``.meta.json`` (server metadata), ``.cimd-off`` (CIMD refused)."""
@@ -285,6 +298,49 @@ class HermesTokenStorage:
 
     def _state_paths(self) -> tuple[Path, Path, Path]:
         return self._tokens_path(), self._client_info_path(), self._meta_path()
+
+    _lock_path = partialmethod(_path, ".lock")
+
+    @contextlib.contextmanager
+    def _locked(self):
+        """Cross-process exclusive lock serializing read-merge-write access to this server's
+        token file (closes the TOCTOU window: an unlocked ``_read_json()`` then
+        ``atomic_json_write()`` prevents a torn file but not a stale-read clobbering a
+        concurrent writer's newer value -- process A reads an old refresh_token, process B
+        writes a rotated one, then A's write overwrites B's with the stale value). The lock
+        file is never removed by ``remove()``; holding it across an unlink is a classic
+        flock/unlink race, and an orphaned empty lock file is harmless.
+
+        Every ``set_tokens()``/``set_refreshed_tokens()`` writer takes this same lock, not only
+        the refresh-scoped carry-forward read, so a plain replacement write can never land
+        between another writer's read and write either. Fails open (proceeds unlocked, logged)
+        if locking the file is impossible on this filesystem -- a hardening layer must not turn
+        an exotic mount into an OAuth outage.
+        """
+        lock_path = self._lock_path()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fh = open(lock_path, "a+b")
+        except OSError as exc:
+            logger.warning("MCP OAuth '%s': could not open token lock file %s -- proceeding unlocked: %s",
+                            self._server_name, lock_path, exc)
+            yield
+            return
+        try:
+            try:
+                _flock(fh, lock=True)
+            except OSError as exc:
+                logger.warning("MCP OAuth '%s': could not lock token file %s -- proceeding unlocked: %s",
+                                self._server_name, lock_path, exc)
+                yield
+                return
+            try:
+                yield
+            finally:
+                with contextlib.suppress(OSError):
+                    _flock(fh, lock=False)
+        finally:
+            fh.close()
 
     @staticmethod
     def _load_model(path: Path, sdk_name: str, label: str, fixup=None):
@@ -344,9 +400,15 @@ class HermesTokenStorage:
         revoked) prior grant's refresh_token, reverting the effective identity at the next
         refresh. Callers persisting the result of an actual token *refresh* -- where "unchanged"
         vs "revoked" ambiguity from RFC 6749 §6 applies -- must use ``set_refreshed_tokens()``
-        instead."""
+        instead.
+
+        Locked (see ``_locked()``) even though a fresh grant reads nothing from disk: without
+        the lock, a fresh write here could still land between a concurrent refresh's read and
+        write, silently discarding the fresh grant's just-written tokens.
+        """
         payload = _model_json(tokens)
-        self._persist_token_payload(payload)
+        with self._locked():
+            self._persist_token_payload(payload)
 
     async def set_refreshed_tokens(self, tokens: "OAuthToken") -> None:
         """Persist the result of a successful OAuth *refresh* (never a fresh authorization-code
@@ -361,13 +423,22 @@ class HermesTokenStorage:
         never learns to do it) still can't erase a good on-disk refresh_token with an omission.
         A genuinely rotating authorization server's new refresh_token still wins -- this only
         fills a gap, never overwrites a present value. A caller that means to actually clear
-        credentials uses remove() (deletes the file), never a bare omission."""
+        credentials uses remove() (deletes the file), never a bare omission.
+
+        The read (to find a gap-fill candidate) and the write are both inside ``_locked()``:
+        without that, two concurrent refreshes on the same server (e.g. a gateway and a CLI
+        sharing the token file, #109932's reported topology) can interleave as read(A) ->
+        write(B, rotated) -> write(A, built from A's now-stale read) -- silently reverting B's
+        rotation. The lock makes each refresh's read-merge-write one atomic unit relative to
+        every other caller of ``set_tokens()``/``set_refreshed_tokens()`` for this server.
+        """
         payload = _model_json(tokens)
-        if not payload.get("refresh_token"):
-            existing = _read_json(self._tokens_path())
-            if existing and existing.get("refresh_token"):
-                payload["refresh_token"] = existing["refresh_token"]
-        self._persist_token_payload(payload)
+        with self._locked():
+            if not payload.get("refresh_token"):
+                existing = _read_json(self._tokens_path())
+                if existing and existing.get("refresh_token"):
+                    payload["refresh_token"] = existing["refresh_token"]
+            self._persist_token_payload(payload)
 
     @staticmethod
     def _coerce_secret_auth_method(data: dict) -> bool:

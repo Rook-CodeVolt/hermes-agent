@@ -221,6 +221,95 @@ class TestHermesTokenStorage:
             "fresh grant must not inherit a prior grant's refresh_token -- generic set_tokens() "
             "must keep pure replacement semantics (Maya's remediation on PR #110201)")
 
+    def test_concurrent_rotation_and_omitted_refresh_does_not_clobber_newer_token(self, tmp_path, monkeypatch):
+        """TOCTOU hardening regression (follow-up to PR #110201's known-follow-up note): storage
+        does an unlocked read-then-write, so two processes racing on the same server's token
+        file can interleave as: process A reads the old refresh_token, process B completes a
+        legitimate rotation (writes a NEW refresh_token), then process A's write -- built from
+        its now-stale read -- clobbers B's rotation with the old value. The write-then-read
+        must be serialized across processes/threads so the newer (rotated) token always wins,
+        regardless of which of the two concurrent callers happens to finish last.
+
+        Drives two real OS threads through ``set_refreshed_tokens()`` on the SAME server name
+        (hence the same on-disk token file and lock file) with a controlled interleaving: the
+        "stale reader" (an omitted-token refresh, which must carry forward whatever refresh_token
+        is on disk) is paused via a monkeypatched ``_read_json`` hook right after its read,
+        deterministically before the "rotator" (a refresh carrying a brand-new refresh_token) is
+        allowed to run. This is not a timing-sensitive sleep-based test: the pause is an
+        ``Event``, and the assertion that the rotator's own write is or isn't observably blocked
+        during that pause is exactly what distinguishes the vulnerable (unlocked) implementation
+        from the fixed (locked) one.
+        """
+        import threading
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        storage_stale_reader = HermesTokenStorage("race-server")
+        storage_rotator = HermesTokenStorage("race-server")
+        token_path = tmp_path / "mcp-tokens" / "race-server.json"
+
+        seed = MagicMock()
+        seed.model_dump.return_value = {
+            "access_token": "at-0", "token_type": "Bearer", "refresh_token": "rt-original", "expires_in": 3600,
+        }
+        asyncio.run(storage_stale_reader.set_tokens(seed))
+
+        import tools.mcp_oauth as mod
+        real_read_json = mod._read_json
+        reader_paused = threading.Event()
+        resume_reader = threading.Event()
+
+        def patched_read_json(path):
+            result = real_read_json(path)
+            if path == token_path and not reader_paused.is_set():
+                reader_paused.set()
+                assert resume_reader.wait(timeout=5), "test deadlocked waiting to resume the stale reader"
+            return result
+
+        monkeypatch.setattr(mod, "_read_json", patched_read_json)
+
+        def run_stale_reader():
+            omitted_refresh = MagicMock()
+            omitted_refresh.model_dump.return_value = {
+                "access_token": "at-stale-reader", "token_type": "Bearer", "expires_in": 3600,
+            }  # no refresh_token key -- must carry forward whatever is on disk at read time
+            asyncio.run(storage_stale_reader.set_refreshed_tokens(omitted_refresh))
+
+        reader_thread = threading.Thread(target=run_stale_reader)
+        reader_thread.start()
+        assert reader_paused.wait(timeout=5), "stale reader never reached its read"
+
+        rotator_done = threading.Event()
+
+        def run_rotator():
+            rotated_refresh = MagicMock()
+            rotated_refresh.model_dump.return_value = {
+                "access_token": "at-rotator", "token_type": "Bearer", "refresh_token": "rt-rotated", "expires_in": 3600,
+            }
+            asyncio.run(storage_rotator.set_refreshed_tokens(rotated_refresh))
+            rotator_done.set()
+
+        rotator_thread = threading.Thread(target=run_rotator)
+        rotator_thread.start()
+        # While the stale reader is paused mid-critical-section, a properly serialized
+        # implementation blocks the rotator on the same per-server lock (it must NOT be able to
+        # complete yet); an unlocked implementation lets it race ahead and finish immediately.
+        rotator_raced_ahead = rotator_done.wait(timeout=2.0)
+
+        resume_reader.set()
+        reader_thread.join(timeout=5)
+        rotator_thread.join(timeout=5)
+        assert not reader_thread.is_alive() and not rotator_thread.is_alive(), "test threads did not finish"
+
+        final = json.loads(token_path.read_text())
+        assert not rotator_raced_ahead, (
+            "the rotator's write completed while the stale reader was still inside its own "
+            "read-then-write window -- storage is not serializing per-server access, so the "
+            "stale reader's write-back can (and per the assertion below, does) clobber the "
+            "rotation")
+        assert final["refresh_token"] == "rt-rotated", (
+            f"expected the newer rotated refresh_token to win, found {final.get('refresh_token')!r} -- "
+            "the stale reader's write-back clobbered the concurrent rotation (TOCTOU race)")
+
     @pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX mode bits not enforced on Windows")
     def test_token_file_created_with_0o600(self, tmp_path, monkeypatch):
         """Tokens must land on disk at 0o600 with no umask-default exposure window.
