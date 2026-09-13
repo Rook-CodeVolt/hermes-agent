@@ -201,8 +201,15 @@ def _assert_not_delegated_child_mutation(
     Ordinary interactive/operator processes remain able to administer Kanban.
     A dispatcher worker, however, is authorised only by the unforgeable,
     one-time capability delivered over its inherited handshake pipe and bound
-    to task/run/workspace/PID/process-start in ``agent.dispatcher_identity``.
-    Descendants inherit neither the consumed token nor the in-process binding.
+    to task/run/workspace/PID/process-start in ``agent.dispatcher_identity``,
+    OR by a short-lived subprocess credential that worker minted for its own
+    ``terminal``-tool child (``agent.dispatcher_identity.mint_subprocess_credential``,
+    which itself only ever succeeds while that binding is live). Descendants
+    inherit neither the consumed handshake token nor the in-process binding;
+    they must present the subprocess credential explicitly, and a
+    ``delegate_task`` child can never obtain one because minting reads this
+    process's own suppressed/absent binding, not anything the child's shell
+    command text can influence.
 
     The marker and process-ancestry checks are denial-only defence in depth.
     The marker is forgeable/removable; ancestry is bypassable by detaching.
@@ -219,6 +226,9 @@ def _assert_not_delegated_child_mutation(
             reason = dispatcher_identity.revalidate(identity)
             if reason is not None:
                 raise PermissionError(f"dispatcher worker identity is no longer valid: {reason}")
+            return
+        credential = os.environ.get(dispatcher_identity.SUBPROCESS_CREDENTIAL_ENV)
+        if credential and dispatcher_identity.validate_subprocess_credential(credential, conn):
             return
     except PermissionError:
         raise
@@ -1157,6 +1167,27 @@ CREATE INDEX IF NOT EXISTS idx_runs_status           ON task_runs(status);
 CREATE INDEX IF NOT EXISTS idx_attachments_task      ON task_attachments(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_id);
 CREATE INDEX IF NOT EXISTS idx_worker_identities_task ON worker_identities(task_id, issued_at);
+
+-- A short-lived, non-consumed credential proving a subprocess descends from a
+-- *specific* dispatcher-worker invocation that positively minted it (never
+-- from a delegate_task/cron scope in the same OS process -- those always see
+-- ``dispatcher_identity.get_bound() is None`` and therefore mint nothing).
+-- Unlike ``worker_identities`` this is revalidated, not CAS-consumed: one
+-- terminal command may fork several descendants (compound shell lines), each
+-- of which must be able to present the same credential.
+CREATE TABLE IF NOT EXISTS worker_subprocess_credentials (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id        TEXT    NOT NULL,
+    run_id         INTEGER NOT NULL,
+    workspace_path TEXT    NOT NULL,
+    worker_pid     INTEGER NOT NULL,
+    proc_start     INTEGER NOT NULL,
+    token_sha256   TEXT    NOT NULL UNIQUE,
+    issued_at      INTEGER NOT NULL,
+    expires_at     INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_subproc_creds_task ON worker_subprocess_credentials(task_id, issued_at);
 """
 
 

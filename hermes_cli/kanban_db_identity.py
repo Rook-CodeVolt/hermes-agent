@@ -110,3 +110,67 @@ def purge_expired_worker_identities(conn: sqlite3.Connection) -> int:
             (int(time.time()),),
         )
     return int(cur.rowcount or 0)
+
+
+def issue_subprocess_credential(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    run_id: int,
+    workspace_path: str,
+    worker_pid: int,
+    proc_start: int,
+    token_sha256: str,
+    ttl_seconds: int,
+) -> int:
+    """Insert one worker-subprocess credential row and return its row id.
+
+    Unlike :func:`record_worker_identity`, this row is never CAS-consumed:
+    it authorises every subprocess the same worker spawns until it expires.
+    """
+    now = int(time.time())
+    with write_txn(conn):
+        cur = conn.execute(
+            """
+            INSERT INTO worker_subprocess_credentials (
+                task_id, run_id, workspace_path, worker_pid, proc_start,
+                token_sha256, issued_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                int(run_id),
+                str(workspace_path),
+                int(worker_pid),
+                int(proc_start),
+                token_sha256,
+                now,
+                now + int(ttl_seconds),
+            ),
+        )
+    return int(cur.lastrowid or 0)
+
+
+def find_valid_subprocess_credential(
+    conn: sqlite3.Connection, token_sha256: str
+) -> Optional[sqlite3.Row]:
+    """Return the matching, unexpired credential row, or ``None``.
+
+    Read-only and repeatable: presenting the same credential from several
+    descendants of one compound shell command must succeed every time.
+    """
+    return conn.execute(
+        "SELECT * FROM worker_subprocess_credentials "
+        "WHERE token_sha256 = ? AND expires_at >= ?",
+        (token_sha256, int(time.time())),
+    ).fetchone()
+
+
+def purge_expired_subprocess_credentials(conn: sqlite3.Connection) -> int:
+    """Delete expired worker-subprocess credential rows."""
+    with write_txn(conn):
+        cur = conn.execute(
+            "DELETE FROM worker_subprocess_credentials WHERE expires_at < ?",
+            (int(time.time()),),
+        )
+    return int(cur.rowcount or 0)
