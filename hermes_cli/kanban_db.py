@@ -633,6 +633,34 @@ def kanban_db_path(board: Optional[str] = None) -> Path:
     return _board_path("HERMES_KANBAN_DB", board, ("kanban.db",), "kanban.db")
 
 
+def board_db_path_no_env_override(slug: str) -> Path:
+    """``kanban.db`` path for *slug*, resolved PURELY from the slug --
+    ``HERMES_KANBAN_DB`` / ``HERMES_KANBAN_BOARD`` and any ambient
+    current-board state are never consulted.
+
+    :func:`kanban_db_path` checks ``HERMES_KANBAN_DB`` FIRST, unconditionally,
+    before ever looking at its ``board`` argument. Every real dispatcher
+    worker has that env var pinned to ITS OWN board
+    (:func:`hermes_cli.kanban_db_dispatch._default_spawn`), and it is
+    inherited unmodified by every non-delegated ``terminal``-tool subprocess
+    that worker spawns. That makes ``kanban_db_path(board=X)`` a no-op for
+    any caller trying to scope to a *specific target* board X that differs
+    from the worker's own -- it silently resolves to the worker's own board
+    DB instead, in exactly the scenario (a worker's own terminal subprocess)
+    the scoping is meant to constrain. Use THIS resolver, never
+    ``kanban_db_path()``, for any authority/credential decision that must
+    pin to an exact target board regardless of the calling process's
+    environment (fixes the env-override bypass Maya found reviewing
+    1bdc8403c9: ``validate_subprocess_credential(..., board=X)``'s scoping
+    was decorative whenever ``HERMES_KANBAN_DB`` was set, which is always,
+    for a real worker).
+    """
+    normed = _require_slug(slug)
+    if normed == DEFAULT_BOARD:
+        return kanban_home() / "kanban.db"
+    return board_dir(normed) / "kanban.db"
+
+
 def workspaces_root(board: Optional[str] = None) -> Path:
     """Per-board scratch workspace root (``HERMES_KANBAN_WORKSPACES_ROOT`` wins);
     ``default`` keeps the legacy ``<root>/kanban/workspaces/``."""

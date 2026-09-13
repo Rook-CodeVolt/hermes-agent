@@ -700,7 +700,16 @@ def validate_subprocess_credential(
         import sqlite3
 
         try:
-            path = kanban_db.kanban_db_path(board=board)
+            # NOT kanban_db.kanban_db_path(board=board): that resolver checks
+            # HERMES_KANBAN_DB FIRST, unconditionally, before ever consulting
+            # `board` -- and every real dispatcher worker has that env var
+            # pinned to its OWN board, inherited unmodified by every
+            # non-delegated terminal-tool subprocess it spawns. That made
+            # this scoping a no-op in exactly the scenario it targets (Maya's
+            # finding reviewing 1bdc8403c9). board_db_path_no_env_override
+            # computes the target board's DB path purely from the slug,
+            # ignoring HERMES_KANBAN_DB/HERMES_KANBAN_BOARD/ambient state.
+            path = kanban_db.board_db_path_no_env_override(board)
         except Exception as exc:
             _log.debug("could not resolve target board %r for subprocess credential check: %s", board, exc)
             return False
