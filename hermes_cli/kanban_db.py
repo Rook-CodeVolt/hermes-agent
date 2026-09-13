@@ -118,21 +118,119 @@ _IS_WINDOWS = sys.platform == "win32"
 KANBAN_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024  # one cap for dashboard, tools and CLI
 
 
-def _assert_not_delegated_child_mutation() -> None:
-    """Reject Kanban mutations from ``delegate_task`` child contexts.
+def _dispatcher_worker_ancestor_pids() -> set[int]:
+    """Return live ancestor PIDs, excluding this process.
 
-    The tool/CLI fast-fail guards are UX, not a trust boundary (a child can shell
-    out or import this module); the invariant lives here so every ``write_txn``
-    user and board-metadata mutator fails closed before touching durable state.
+    This is defence in depth for a CLI subprocess that deliberately strips the
+    delegated-child marker.  It is not the authority primitive: a detached /
+    re-parented process can escape ancestry, so dispatcher workers are authorised
+    only by ``agent.dispatcher_identity``'s one-time, process-bound capability.
     """
     try:
-        from agent.delegation_context import is_delegated_child_process_context
+        import psutil
 
-        delegated = is_delegated_child_process_context()
-    except Exception:
-        delegated = bool(os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"))
-    if delegated:
-        raise PermissionError("delegate_task child contexts cannot mutate Kanban tasks or boards")
+        return {int(parent.pid) for parent in psutil.Process().parents()}
+    except Exception as exc:
+        _log.debug("could not inspect process ancestry for Kanban mutation: %s", exc)
+        return set()
+
+
+def _candidate_kanban_dbs() -> list[Path]:
+    """Best-effort board DB inventory for ancestry checks without trusting env.
+
+    Delegated-child scrubbing intentionally removes HERMES_KANBAN_DB, but the
+    profile home (``HERMES_HOME``/``HERMES_KANBAN_HOME``) still resolves the
+    default and named-board databases correctly.  Deliberately NOT cwd-based:
+    every dispatcher worker's workspace lives under a directory literally
+    named ``workspaces`` by construction, so inferring a board path from cwd
+    would match an unrelated real board any time this runs from inside a
+    worker's own workspace (including this very check's own test suite),
+    turning an ordinary in-process mutation into a false-positive denial.
+    """
+    candidates: list[Path] = []
+    with contextlib.suppress(Exception):
+        candidates.append(kanban_db_path())
+    with contextlib.suppress(Exception):
+        candidates.extend(sorted(boards_root().glob("*/kanban.db")))
+    return list(dict.fromkeys(path.resolve() for path in candidates))
+
+
+def _descends_from_live_dispatcher_worker(conn: Optional[sqlite3.Connection] = None) -> bool:
+    """Whether this process descends from a worker PID recorded on any known board.
+
+    Ancestry closes the marker-stripping subprocess path, but is explicitly
+    bypassable by detaching/re-parenting and therefore never grants authority.
+    """
+    ancestors = _dispatcher_worker_ancestor_pids()
+    if not ancestors:
+        return False
+
+    def _matches(db: sqlite3.Connection) -> bool:
+        try:
+            rows = db.execute(
+                "SELECT worker_pid FROM tasks "
+                "WHERE status = 'running' AND worker_pid IS NOT NULL"
+            ).fetchall()
+            return any(int(row["worker_pid"]) in ancestors for row in rows)
+        except Exception:
+            return False
+
+    if conn is not None:
+        return _matches(conn)
+    for path in _candidate_kanban_dbs():
+        if not path.is_file():
+            continue
+        try:
+            probe = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            probe.row_factory = sqlite3.Row
+            try:
+                if _matches(probe):
+                    return True
+            finally:
+                probe.close()
+        except Exception:
+            continue
+    return False
+
+
+def _assert_not_delegated_child_mutation(
+    conn: Optional[sqlite3.Connection] = None,
+) -> None:
+    """Reject Kanban mutation without dispatcher-owned process authority.
+
+    Ordinary interactive/operator processes remain able to administer Kanban.
+    A dispatcher worker, however, is authorised only by the unforgeable,
+    one-time capability delivered over its inherited handshake pipe and bound
+    to task/run/workspace/PID/process-start in ``agent.dispatcher_identity``.
+    Descendants inherit neither the consumed token nor the in-process binding.
+
+    The marker and process-ancestry checks are denial-only defence in depth.
+    The marker is forgeable/removable; ancestry is bypassable by detaching.
+    Neither can grant mutation authority.
+    """
+    denied = "delegate_task child contexts cannot mutate Kanban tasks or boards"
+    try:
+        from agent import delegation_context, dispatcher_identity
+
+        if delegation_context.is_delegated_child_process_context():
+            raise PermissionError(denied)
+        identity = dispatcher_identity.get_bound()
+        if identity is not None:
+            reason = dispatcher_identity.revalidate(identity)
+            if reason is not None:
+                raise PermissionError(f"dispatcher worker identity is no longer valid: {reason}")
+            return
+    except PermissionError:
+        raise
+    except Exception as exc:
+        # Identity machinery must never fail open for a process that still has
+        # explicit worker/delegate lineage in its environment.
+        _log.debug("could not validate dispatcher worker identity: %s", exc)
+        if os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT") or os.environ.get("HERMES_KANBAN_TASK"):
+            raise PermissionError(denied) from None
+
+    if _descends_from_live_dispatcher_worker(conn):
+        raise PermissionError(denied)
 
 
 def _fire_kanban_lifecycle_hook(event: str, task_id: str, **fields: Any) -> None:

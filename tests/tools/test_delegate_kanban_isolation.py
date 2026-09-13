@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -171,6 +172,67 @@ def test_delegate_child_execute_code_env_bridges_contextvar_and_scrubs_kanban(
     assert "HERMES_KANBAN_DB" not in env
     assert "HERMES_KANBAN_WORKSPACE" not in env
     assert "HERMES_KANBAN_CLAIM_LOCK" not in env
+
+
+
+
+def _kanban_cli(*argv: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    code = (
+        "import argparse,sys; from hermes_cli import kanban; "
+        "p=argparse.ArgumentParser(); s=p.add_subparsers(dest='cmd'); "
+        "kanban.build_parser(s); a=p.parse_args(sys.argv[1:]); "
+        "raise SystemExit(kanban.kanban_command(a))"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code, "kanban", *argv],
+        env=env,
+        cwd=str(_REPO_ROOT),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=20,
+        check=False,
+    )
+
+
+def test_real_cli_marker_strip_still_cannot_mutate_from_worker_descendant(monkeypatch, tmp_path):
+    """A real subprocess cannot turn missing marker text into write authority."""
+    kb, tid, _workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    from hermes_cli import kanban_db_connect as kbc
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+
+    env = os.environ.copy()
+    env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+    env.pop("HERMES_KANBAN_TASK", None)
+    env.pop("HERMES_KANBAN_RUN_ID", None)
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+    result = _kanban_cli("comment", tid, "forbidden", env=env)
+
+    assert result.returncode == 1, result.stdout
+    assert "delegate_task child contexts cannot mutate Kanban" in result.stdout
+    with kbc.connect_closing() as conn:
+        assert kb.list_comments(conn, tid) == []
+
+
+def test_real_cli_rejects_free_form_author_spoof(monkeypatch, tmp_path):
+    """Mutating CLI commands no longer accept caller-selected audit identities."""
+    kb, tid, _workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    env = os.environ.copy()
+    env.pop("HERMES_KANBAN_TASK", None)
+    env.pop("HERMES_KANBAN_RUN_ID", None)
+    env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+
+    result = _kanban_cli("comment", tid, "spoof", "--author", "maya", env=env)
+
+    assert result.returncode == 2, result.stdout
+    assert "unrecognized arguments: --author maya" in result.stdout
+    from hermes_cli import kanban_db_connect as kbc
+    with kbc.connect_closing() as conn:
+        assert kb.list_comments(conn, tid) == []
 
 
 def test_delegate_child_kanban_cli_cannot_delete_parent_board(
