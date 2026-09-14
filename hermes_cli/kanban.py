@@ -233,10 +233,16 @@ def _is_delegated_child_cli_mutation(args: argparse.Namespace) -> bool:
             return False
     elif action not in _DELEGATED_CHILD_DENIED_ACTIONS:
         return False
+    # This check runs BEFORE `--board` is applied as the active board (see
+    # caller), so pass the raw --board override directly rather than the
+    # not-yet-scoped ambient current board -- otherwise a `--board beta
+    # comment ...` mutation would be checked against the wrong board's
+    # worker_spawns rows (board-divergence bug class, t_0977ea27 / t_85586891).
+    board_override = getattr(args, "board", None)
     try:
         from agent.delegation_context import is_delegated_child_process_context
 
-        return is_delegated_child_process_context()
+        return is_delegated_child_process_context(board=board_override)
     except Exception:
         return bool(os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"))
 

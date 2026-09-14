@@ -673,7 +673,7 @@ def connect(db_path: Optional[Path] = None, *, board: Optional[str] = None) -> s
     ``<root>/kanban/current`` -> ``default``)."""
     path = db_path if db_path is not None else _kb.kanban_db_path(board=board)
     from agent.delegation_context import is_delegated_child_process_context
-    if is_delegated_child_process_context():
+    if is_delegated_child_process_context(board=board):
         # Reads must not enter schema/backfill write transactions. Never create a
         # missing board or migrate on a descendant's behalf; the owner initializes it.
         conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -1152,7 +1152,25 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
     (``complete_task`` & co.) must never run under an open outer transaction,
     since those side effects would fire while the outer txn can still roll back.
     """
-    _kb._assert_not_delegated_child_mutation()
+    # Only hand a REAL sqlite3.Connection through to the delegated-child
+    # guard's ancestry lookup. That lookup runs a SELECT against
+    # worker_spawns on whatever connection it's given
+    # (kanban_worker_lineage.is_descendant_of_dispatcher_worker), which
+    # requires a genuine cursor-returning `.execute()` -- not something a
+    # test double scripting only BEGIN/COMMIT/ROLLBACK outcomes (see
+    # tests/hermes_cli/test_kanban_write_txn_busy_retry.py's `_FakeConn`)
+    # promises to provide. Passing such a double through made every SELECT
+    # raise AttributeError on `.fetchone()`, which the guard's outer
+    # except swallows and treats as fail-closed (denied) -- wrongly
+    # rejecting ordinary non-delegated transactions that merely happen to
+    # run against a non-sqlite3 connection stand-in. Falling back to
+    # `conn=None` here still runs the check (via the guard's own
+    # ambient-board resolution), it just can't use this specific object as
+    # the board-scoped connection -- exactly the same as any other caller
+    # that has no connection of its own yet.
+    _kb._assert_not_delegated_child_mutation(
+        conn if isinstance(conn, sqlite3.Connection) else None
+    )
     if getattr(conn, "in_transaction", False):
         if not allow_nested:
             raise RuntimeError(

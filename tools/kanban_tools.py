@@ -61,11 +61,11 @@ def _profile_has_kanban_toolset() -> bool:
         return False
 
 
-def _delegation_ctx(predicate: str, default: bool) -> bool:
+def _delegation_ctx(predicate: str, default: bool, **kwargs) -> bool:
     """``agent.delegation_context.<predicate>()``; ``default`` when it cannot be evaluated."""
     try:
         from agent import delegation_context
-        return getattr(delegation_context, predicate)()
+        return getattr(delegation_context, predicate)(**kwargs)
     except Exception:
         return default
 
@@ -136,10 +136,10 @@ def _kanban_handler(tool_name: str) -> Callable:
     return deco
 
 
-def _reject_delegated_child_mutation(tool_name: str) -> None:
+def _reject_delegated_child_mutation(tool_name: str, board: Optional[str] = None) -> None:
     """A delegate_task child shares the parent's process, so inherited HERMES_KANBAN_*
     env is not proof of ownership: it may report findings but must not mutate."""
-    if _delegation_ctx("is_delegated_child_process_context", False):
+    if _delegation_ctx("is_delegated_child_process_context", False, board=board):
         raise _Reject(
             f"{tool_name} refused: delegate_task child agents are not Kanban run owners. "
             "Return findings to the parent agent; the dispatcher worker or an explicitly "
@@ -201,7 +201,7 @@ def _enforce_worker_task_ownership(tid: str) -> None:
 def _worker_guard(tool_name: str, args: dict) -> str:
     """Worker mutation preamble, in order: delegate-child rejection, task id
     resolution, task-scope ownership. Returns the task id."""
-    _reject_delegated_child_mutation(tool_name)
+    _reject_delegated_child_mutation(tool_name, board=args.get("board"))
     tid = _require_task_id(args)
     _enforce_worker_task_ownership(tid)
     return tid
@@ -712,7 +712,7 @@ def _handle_heartbeat(args: dict, **kw) -> str:
 @_kanban_handler("kanban_comment")
 def _handle_comment(args: dict, **kw) -> str:
     """Append a comment to a task's thread."""
-    _reject_delegated_child_mutation("kanban_comment")
+    _reject_delegated_child_mutation("kanban_comment", board=args.get("board"))
     tid = args.get("task_id")
     _check(tid, "task_id is required (use the current task id if that's what "
                 "you mean — pulls from env but kept explicit here)")
@@ -834,7 +834,7 @@ def _handle_attachments(args: dict, **kw) -> str:
 @_kanban_handler("kanban_create")
 def _handle_create(args: dict, **kw) -> str:
     """Create a (child) task; orchestrator workers use this to fan out."""
-    _reject_delegated_child_mutation("kanban_create")
+    _reject_delegated_child_mutation("kanban_create", board=args.get("board"))
     title = _require_text(args, "title")
     assignee = args.get("assignee")
     _check(assignee, "assignee is required — name the profile that should execute this "
@@ -964,7 +964,7 @@ def _maybe_auto_subscribe(conn: Any, task_id: str) -> bool:
 @_kanban_handler("kanban_unblock")
 def _handle_unblock(args: dict, **kw) -> str:
     """Transition a blocked task to ready, or todo while parents remain open."""
-    _reject_delegated_child_mutation("kanban_unblock")
+    _reject_delegated_child_mutation("kanban_unblock", board=args.get("board"))
     _require_orchestrator_tool("kanban_unblock")
     tid = args.get("task_id")
     _check(tid, "task_id is required")
@@ -978,7 +978,7 @@ def _handle_unblock(args: dict, **kw) -> str:
 @_kanban_handler("kanban_link")
 def _handle_link(args: dict, **kw) -> str:
     """Add a parent→child dependency edge after the fact (cycles/self-links → ValueError)."""
-    _reject_delegated_child_mutation("kanban_link")
+    _reject_delegated_child_mutation("kanban_link", board=args.get("board"))
     parent_id = args.get("parent_id")
     child_id = args.get("child_id")
     _check(parent_id and child_id, "both parent_id and child_id are required")
