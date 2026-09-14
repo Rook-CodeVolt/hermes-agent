@@ -2299,6 +2299,29 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
         )
     # Intentionally NOT closing log_f: the child keeps writing after return;
     # the OS-level FD stays open in the child until it exits.
+    #
+    # Record the kernel-verified spawn fact (CV-A01 / t_70827e4e / t_11e8c077):
+    # this is the ONLY place a worker_spawns row is minted, and it happens
+    # right after Popen returns so the kernel start time read here is
+    # unambiguously this fresh child's, never a stale/reused PID's. This is
+    # the unforgeable half of the delegated-child mutation guard — see
+    # hermes_cli/kanban_worker_lineage.py for the full design note. Best
+    # effort: a failure here must not fail a dispatch that already spawned
+    # a real worker process.
+    try:
+        from hermes_cli import kanban_db_connect as _kbc
+        from hermes_cli.kanban_worker_lineage import record_worker_spawn
+
+        with _kbc.connect_closing(db_path=_kb.kanban_db_path(board=board)) as _spawn_conn:
+            record_worker_spawn(
+                _spawn_conn, task_id=task.id, run_id=task.current_run_id, worker_pid=proc.pid,
+            )
+    except Exception:
+        _kb._log.exception(
+            "kanban: failed to record worker-spawn ancestry row for task %s pid %s "
+            "(delegated-child mutation guard will not cover this worker)",
+            task.id, proc.pid,
+        )
     return proc.pid
 
 

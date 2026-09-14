@@ -118,17 +118,27 @@ _IS_WINDOWS = sys.platform == "win32"
 KANBAN_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024  # one cap for dashboard, tools and CLI
 
 
-def _assert_not_delegated_child_mutation() -> None:
+def _assert_not_delegated_child_mutation(
+    conn: Optional[sqlite3.Connection] = None, *, board: Optional[str] = None,
+) -> None:
     """Reject Kanban mutations from ``delegate_task`` child contexts.
 
     The tool/CLI fast-fail guards are UX, not a trust boundary (a child can shell
     out or import this module); the invariant lives here so every ``write_txn``
     user and board-metadata mutator fails closed before touching durable state.
+
+    *conn*/*board*: pass the actual connection/board slug this mutation is
+    targeting (never leave both bare unless the mutation genuinely has none,
+    e.g. ``set_current_board``/``clear_current_board`` which target the
+    board POINTER itself) -- see
+    :func:`agent.delegation_context.is_delegated_child_process_context` for
+    why a re-derived default here would reopen the board-divergence bug
+    class (t_0977ea27 / t_85586891).
     """
     try:
         from agent.delegation_context import is_delegated_child_process_context
 
-        delegated = is_delegated_child_process_context()
+        delegated = is_delegated_child_process_context(conn, board=board)
     except Exception:
         delegated = bool(os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"))
     if delegated:
@@ -634,8 +644,8 @@ def list_boards(*, include_archived: bool = True) -> list[dict]:
 def remove_board(slug: str, *, archive: bool = True) -> dict:
     """Archive (to ``boards/_archived/<slug>-<ts>/``) or delete a board;
     ``default`` cannot be removed. Returns ``{"slug", "action", "new_path"}``."""
-    _assert_not_delegated_child_mutation()
     normed = _require_slug(slug)
+    _assert_not_delegated_child_mutation(board=normed)
     if normed == DEFAULT_BOARD:
         raise ValueError("the 'default' board cannot be removed")
     d = board_dir(normed)
@@ -1034,6 +1044,26 @@ CREATE TABLE IF NOT EXISTS kanban_notify_subs (
     PRIMARY KEY (task_id, platform, chat_id, thread_id)
 );
 
+-- Kernel-verified record of a Kanban worker the dispatcher itself spawned
+-- (written by hermes_cli.kanban_worker_lineage.record_worker_spawn, called
+-- once from kanban_db_dispatch._default_spawn right after Popen returns).
+-- ``proc_start`` is the OS-reported kernel start time for worker_pid, read
+-- via psutil.Process.create_time() -- never anything the child process
+-- itself supplies. The delegated-child mutation guard walks the CALLING
+-- process's real kernel ancestry and checks each ancestor's (pid, start)
+-- pair against this table: a subprocess cannot forge its own ancestry, so
+-- this closes the gap the old HERMES_DELEGATED_CHILD_CONTEXT env-var-only
+-- check left open (CV-A01 / t_70827e4e / t_11e8c077).
+CREATE TABLE IF NOT EXISTS worker_spawns (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id     TEXT NOT NULL,
+    run_id      INTEGER,
+    worker_pid  INTEGER NOT NULL,
+    proc_start  INTEGER NOT NULL,
+    issued_at   INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_status          ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_links_child           ON task_links(child_id);
@@ -1044,6 +1074,9 @@ CREATE INDEX IF NOT EXISTS idx_runs_task             ON task_runs(task_id, start
 CREATE INDEX IF NOT EXISTS idx_runs_status           ON task_runs(status);
 CREATE INDEX IF NOT EXISTS idx_attachments_task      ON task_attachments(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_id);
+CREATE INDEX IF NOT EXISTS idx_worker_spawns_pid_start
+    ON worker_spawns(worker_pid, proc_start);
+CREATE INDEX IF NOT EXISTS idx_worker_spawns_expires ON worker_spawns(expires_at);
 """
 
 
