@@ -40,6 +40,7 @@ SKIP_SUBSTRINGS = (
     "github-actions",
     "anthropic.com",
     "cursor.com",
+    "rook@codevolt.co.uk",
 )
 ID_NOREPLY_RE = re.compile(r"\d+\+.+@users\.noreply\.github\.com$")
 BARE_NOREPLY_RE = re.compile(r"^([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})@users\.noreply\.github\.com$")
