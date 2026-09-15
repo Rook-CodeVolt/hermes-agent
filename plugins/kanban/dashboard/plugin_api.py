@@ -93,17 +93,46 @@ def _conn(board: Optional[str] = None):
 
 @contextmanager
 def _board_conn(board: Optional[str]) -> Iterator[tuple[Optional[str], sqlite3.Connection]]:
-    """Resolve the ``board`` query param, open a connection, close it on exit."""
+    """Resolve the ``board`` query param, open a connection, close it on exit.
+
+    H1 trusted authority context (design §8, t_c67e90a0): every handler
+    reached through this helper is a FastAPI route function, which FastAPI
+    only invokes AFTER every registered ``@app.middleware("http")`` --
+    including the Host-header check, the OAuth/cookie gate
+    (``_dashboard_auth_gate``), and the session-token gate
+    (``auth_middleware``) -- has already run and accepted the request (see
+    ``hermes_cli/web_server.py``). This context is therefore entered only
+    for an already-authenticated request, never derived from ambient worker
+    env; a request that reaches this helper without having passed those
+    gates cannot exist by FastAPI's own middleware ordering. Scoped to the
+    request's own board (``board``, resolved above), matching the design's
+    "scope to requested board + route operation" requirement -- callers
+    still pass their own explicit board through ``kanban_db`` calls as
+    before, this context only supplies the mutation AUTHORITY, not board
+    targeting.
+    """
     board = _resolve_board(board)
-    with closing(_conn(board=board)) as conn:
+    from hermes_cli import kanban_authority_context as kac
+    with kac.dashboard_request_authority(), closing(_conn(board=board)) as conn:
         yield board, conn
 
 
 def _with_board_pinned(board: Optional[str], fn: Callable[[], Any]) -> Any:
     """Run ``fn`` with the board pinned context-locally, not via the process-global
-    ``HERMES_KANBAN_BOARD`` env var (concurrent requests for different boards would cross-write)."""
-    with kanban_db.scoped_current_board(_resolve_board(board) or kanban_db.DEFAULT_BOARD):
-        return fn()
+    ``HERMES_KANBAN_BOARD`` env var (concurrent requests for different boards would cross-write).
+
+    H1 trusted authority context (design §8, t_c67e90a0): callers of this
+    helper are exclusively sync ``def`` dashboard route handlers (specify/
+    decompose/estimate), reached only post-auth for the same reason
+    documented on :func:`_board_conn`. A sync ``def`` FastAPI handler runs
+    entirely on one threadpool thread (no executor hop mid-handler), so a
+    ContextVar entered here is visible to everything ``fn`` calls,
+    including a nested ``write_txn``.
+    """
+    from hermes_cli import kanban_authority_context as kac
+    with kac.dashboard_request_authority():
+        with kanban_db.scoped_current_board(_resolve_board(board) or kanban_db.DEFAULT_BOARD):
+            return fn()
 
 
 def _require(getter: Callable, conn: sqlite3.Connection, ident, label: str):
@@ -1384,12 +1413,18 @@ def create_board_endpoint(payload: CreateBoardBody):
     project_id, _pname, primary_path = _resolve_project(payload.project_id)
     if primary_path and not default_workdir:
         default_workdir = primary_path
-    with _value_error_400():
-        meta = kanban_db.create_board(
-            payload.slug, default_workdir=default_workdir, project_id=project_id, **_board_display_kwargs(payload))
-    if payload.switch:
+    from hermes_cli import kanban_authority_context as kac
+    # H1 trusted authority context (design §8, t_c67e90a0): this handler
+    # mutates board metadata/pointer directly (not via _board_conn), so it
+    # needs its own scope -- see _board_conn's docstring for why "already
+    # past FastAPI's auth middleware" holds here too.
+    with kac.dashboard_request_authority():
         with _value_error_400():
-            kanban_db.set_current_board(meta["slug"])
+            meta = kanban_db.create_board(
+                payload.slug, default_workdir=default_workdir, project_id=project_id, **_board_display_kwargs(payload))
+        if payload.switch:
+            with _value_error_400():
+                kanban_db.set_current_board(meta["slug"])
     return {"board": _annotate_board_meta(meta), "current": kanban_db.get_current_board()}
 
 
@@ -1411,24 +1446,43 @@ def rename_board(slug: str, payload: RenameBoardBody):
                 default_workdir = primary_path
         else:
             project_id = ""  # clear the scope
-    meta = kanban_db.write_board_metadata(
-        normed, default_workdir=default_workdir, project_id=project_id, **_board_display_kwargs(payload))
+    from hermes_cli import kanban_authority_context as kac
+    with kac.dashboard_request_authority():
+        meta = kanban_db.write_board_metadata(
+            normed, default_workdir=default_workdir, project_id=project_id, **_board_display_kwargs(payload))
     return {"board": _annotate_board_meta(meta)}
 
 
 @router.delete("/boards/{slug}")
 def delete_board(slug: str, delete: bool = Query(False, description="Hard-delete instead of archive")):
     """Archive (default) or hard-delete a board."""
-    with _value_error_400():
-        res = kanban_db.remove_board(slug, archive=not delete)
+    from hermes_cli import kanban_authority_context as kac
+    with kac.dashboard_request_authority():
+        with _value_error_400():
+            res = kanban_db.remove_board(slug, archive=not delete)
     return {"result": res, "current": kanban_db.get_current_board()}
 
 
 async def _run_transfer(fn, log_label: str):
     """Run a blocking kanban_transfer call off the event loop, mapping its errors
-    to 404 (missing path) / 400 (invalid) / 500 (logged)."""
+    to 404 (missing path) / 400 (invalid) / 500 (logged).
+
+    Uses ``contextvars.copy_context()`` explicitly (NOT the bare
+    ``run_in_executor(None, fn)`` this used to call) because, unlike
+    ``asyncio.to_thread``, ``loop.run_in_executor`` does NOT propagate the
+    calling coroutine's ContextVars into the executor thread -- verified:
+    a ContextVar set immediately before ``run_in_executor`` is invisible
+    inside the submitted function, silently defeating any
+    ``kanban_authority_context`` scope a caller enters around this call.
+    Copying the context explicitly here is what makes M1/H1 trusted scopes
+    entered by callers (``export_board_endpoint`` et al.) actually reach
+    the thread where the mutation happens.
+    """
+    import contextvars
+
+    ctx = contextvars.copy_context()
     try:
-        return await asyncio.get_running_loop().run_in_executor(None, fn)
+        return await asyncio.get_running_loop().run_in_executor(None, lambda: ctx.run(fn))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
@@ -1451,9 +1505,15 @@ async def export_board_endpoint(slug: str, body: ExportBoardBody):
         except OSError as exc:
             raise HTTPException(status_code=500, detail=f"Could not create export directory: {exc}")
         output = str(staging / f"{slug}-{time.strftime('%Y%m%d-%H%M%S')}.tar.gz")
-    return await _run_transfer(
-        lambda: kanban_transfer.export_board(slug, output, include_attachments=body.attachments, include_logs=body.logs),
-        f"POST /boards/{slug}/export")
+    from hermes_cli import kanban_authority_context as kac
+    # H1: export reads the board (no mutation of tasks) but does write the
+    # archive file and, via kanban_transfer, may touch board bookkeeping --
+    # scope it the same as every other dashboard-request mutation for
+    # consistency and because kanban_transfer is shared with the CLI/M1 path.
+    with kac.dashboard_request_authority():
+        return await _run_transfer(
+            lambda: kanban_transfer.export_board(slug, output, include_attachments=body.attachments, include_logs=body.logs),
+            f"POST /boards/{slug}/export")
 
 
 @router.post("/boards/import")
@@ -1464,9 +1524,11 @@ async def import_board_endpoint(body: ImportBoardBody):
     archive = (body.archive or "").strip()
     if not archive:
         raise HTTPException(status_code=400, detail="archive path is required")
-    result = await _run_transfer(
-        lambda: kanban_transfer.import_board(archive, (body.slug or "").strip() or None, activate=body.switch),
-        "POST /boards/import")
+    from hermes_cli import kanban_authority_context as kac
+    with kac.dashboard_request_authority():
+        result = await _run_transfer(
+            lambda: kanban_transfer.import_board(archive, (body.slug or "").strip() or None, activate=body.switch),
+            "POST /boards/import")
     return {**result, "current": kanban_db.get_current_board()}
 
 
@@ -1475,7 +1537,9 @@ def switch_board(slug: str):
     """Persist ``slug`` as the active board for CLI / slash-command parity
     (dashboard users pick boards client-side via localStorage)."""
     normed = _existing_board_slug(slug)
-    kanban_db.set_current_board(normed)
+    from hermes_cli import kanban_authority_context as kac
+    with kac.dashboard_request_authority():
+        kanban_db.set_current_board(normed)
     return {"current": normed}
 
 

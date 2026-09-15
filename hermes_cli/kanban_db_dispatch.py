@@ -2279,6 +2279,45 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
     cmd = _restart_safe_worker_argv(task, cmd)
     from tools.process_registry import systemd_user_bus_env
     env = systemd_user_bus_env(env)
+
+    # --- Durable per-invocation grant: pending issuance BEFORE Popen -------
+    # (t_714420e1, design t_a1260456 section 4). NOT YET the live mutation
+    # authority (that cutover is gated on the mandatory invocation-path
+    # inventory, design section 8, and is out of scope for this pass) --
+    # this only mints and threads the credential so the mechanism can be
+    # exercised and adversarially tested end-to-end ahead of cutover. The
+    # existing kernel-ancestry guard (kanban_worker_lineage) remains the
+    # LIVE authority unchanged; issuance/activation failure here must not
+    # regress that path, so failures here only skip granting coverage, they
+    # do not block dispatch.
+    from hermes_cli import kanban_db_connect as _kbc
+    from hermes_cli import kanban_invocation_authority as kia
+
+    grant_id = None
+    grant_token = None
+    grant_run_id = task.current_run_id
+    if grant_run_id is not None:
+        try:
+            with _kbc.connect_closing(db_path=_kb.kanban_db_path(board=board)) as _grant_conn:
+                grant_token = kia.issue_pending_grant(
+                    _grant_conn, task_id=task.id, run_id=grant_run_id,
+                    ttl_seconds=(
+                        int(task.max_runtime_seconds) + kia.SHUTDOWN_GRACE_SECONDS
+                        if task.max_runtime_seconds else None
+                    ),
+                )
+            grant_id = grant_token.split(".", 2)[1]
+            env[kia.GRANT_ENV_VAR] = grant_token
+        except Exception:
+            _kb._log.exception(
+                "kanban: failed to issue a worker-invocation grant for task %s "
+                "(dispatch continues on the interim ancestry guard only)",
+                task.id,
+            )
+            grant_id = None
+            grant_token = None
+            env.pop(kia.GRANT_ENV_VAR, None)
+
     log_f = _open_worker_log(task, board)
     try:
         proc = subprocess.Popen(  # noqa: S603 -- argv is a fixed list built above
@@ -2293,10 +2332,47 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
         )
     except FileNotFoundError:
         log_f.close()
+        if grant_id is not None:
+            with contextlib.suppress(Exception):
+                with _kbc.connect_closing(db_path=_kb.kanban_db_path(board=board)) as _grant_conn:
+                    kia.delete_pending_grant(_grant_conn, grant_id=grant_id)
         raise RuntimeError(
             "`hermes` executable not found on PATH. "
             "Install Hermes Agent or activate its venv before running the kanban dispatcher."
         )
+
+    # Activate the pending grant against the REAL spawned child's kernel
+    # identity (design section 4.4-4.5). A pending row is never itself
+    # sufficient authority, so this always runs immediately after Popen.
+    # Activation failure is logged and the pending row is cleaned up; it
+    # does NOT terminate the already-spawned worker here (the "terminate on
+    # activation failure" contract in the design applies once this
+    # mechanism becomes the enforced authority at cutover -- until then the
+    # interim ancestry guard is still the live boundary and must not be
+    # regressed by this addition).
+    if grant_id is not None:
+        assert grant_run_id is not None  # grant_id is only set when grant_run_id was bound above
+        try:
+            with _kbc.connect_closing(db_path=_kb.kanban_db_path(board=board)) as _grant_conn:
+                activated = kia.activate_grant(
+                    _grant_conn, grant_id=grant_id, task_id=task.id,
+                    run_id=int(grant_run_id), worker_pid=proc.pid,
+                )
+            if not activated:
+                _kb._log.warning(
+                    "kanban: worker-invocation grant %s failed to activate for "
+                    "task %s pid %s; revoking (interim ancestry guard still "
+                    "covers this worker).", grant_id, task.id, proc.pid,
+                )
+                with contextlib.suppress(Exception):
+                    with _kbc.connect_closing(db_path=_kb.kanban_db_path(board=board)) as _grant_conn:
+                        kia.revoke_grant(_grant_conn, grant_id=grant_id)
+        except Exception:
+            _kb._log.exception(
+                "kanban: failed to activate worker-invocation grant %s for task "
+                "%s pid %s (interim ancestry guard still covers this worker)",
+                grant_id, task.id, proc.pid,
+            )
     # Intentionally NOT closing log_f: the child keeps writing after return;
     # the OS-level FD stays open in the child until it exits.
     #

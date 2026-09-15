@@ -145,6 +145,36 @@ def _assert_not_delegated_child_mutation(
         raise PermissionError("delegate_task child contexts cannot mutate Kanban tasks or boards")
 
 
+def _require_board_pointer_mutation_authority() -> None:
+    """Authority gate for the board POINTER itself (``set_current_board`` /
+    ``clear_current_board``) -- design §5/§8 inventory row B1: these have no
+    target-board connection, so a worker's board-scoped invocation grant is
+    NEVER sufficient regardless of validity, distinct from every other
+    ``write_txn`` caller. Runs the same interim delegated-child guard first
+    (unconditional, unchanged), then Phase A telemetry + Phase B
+    enforcement using :func:`hermes_cli.kanban_authority_context.
+    board_pointer_authority_holder` instead of a worker grant lookup --
+    there is no board connection here to verify one against.
+    """
+    _assert_not_delegated_child_mutation()
+
+    from hermes_cli import kanban_authority_context as kac
+    from hermes_cli import kanban_invocation_authority as kia
+
+    holder = kac.board_pointer_authority_holder()
+    if holder is not None:
+        decision = kia.AuthorityDecision(allowed=True, authority_class=holder)
+    else:
+        decision = kia.AuthorityDecision(
+            allowed=False, authority_class="none", deny_reason="unadmitted-path",
+        )
+    kia.record_authority_decision_telemetry(decision, operation="board_pointer")
+    if kia.enforcement_enabled() and not decision.allowed:
+        raise PermissionError(
+            f"kanban: board pointer mutation denied (invocation authority): {decision.deny_reason}"
+        )
+
+
 def _fire_kanban_lifecycle_hook(event: str, task_id: str, **fields: Any) -> None:
     """Best-effort lifecycle hook. Call AFTER the write txn commits (plugins never
     run under the SQLite write lock, always see durable state); failures are
@@ -445,7 +475,7 @@ def get_current_board() -> str:
 def set_current_board(slug: str) -> Path:
     """Persist ``slug`` as the active board; returns the file written. Does NOT
     check the board exists — callers do (so ``boards switch <typo>`` errors)."""
-    _assert_not_delegated_child_mutation()
+    _require_board_pointer_mutation_authority()
     normed = _require_slug(slug)
     path = current_board_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -455,7 +485,7 @@ def set_current_board(slug: str) -> Path:
 
 def clear_current_board() -> None:
     """Remove ``<root>/kanban/current`` so the active board reverts to ``default``."""
-    _assert_not_delegated_child_mutation()
+    _require_board_pointer_mutation_authority()
     with contextlib.suppress(FileNotFoundError):
         current_board_path().unlink()
 
@@ -575,7 +605,7 @@ def write_board_metadata(
     """Create/update ``board.json``; unmentioned fields are preserved, ``created_at``
     set on first write. ``project_id``/``default_workdir``: ``None`` = unchanged,
     "" = clear (``project_id`` is not validated here)."""
-    _assert_not_delegated_child_mutation()
+    _require_board_pointer_mutation_authority()
     slug = _slug_or_default(board)
     meta = read_board_metadata(slug)
     # db_path is derived on every read; never persist it into board.json.
@@ -1064,6 +1094,34 @@ CREATE TABLE IF NOT EXISTS worker_spawns (
     expires_at  INTEGER NOT NULL
 );
 
+-- Durable per-invocation mutation authority (t_714420e1, design t_a1260456):
+-- a positive-allowlist replacement for kernel-ancestry authorization. A row
+-- here is minted PENDING by the dispatcher's own spawn path
+-- (kanban_db_dispatch._default_spawn) in the target board connection BEFORE
+-- Popen, then ACTIVATED immediately after Popen returns by binding it to the
+-- exact spawned child's (worker_pid, proc_start) -- both OS-reported, never
+-- supplied by the child. Unlike worker_spawns/kernel ancestry (a live
+-- process-tree fact erased by detach/reparent), authorization here depends
+-- only on this durable row plus the CALLING process's own current kernel
+-- identity, so a detached/reparented descendant is denied by PID/start
+-- mismatch rather than by a (defeatable) ancestry walk. See
+-- hermes_cli/kanban_invocation_authority.py for the full design note and
+-- verification contract.
+CREATE TABLE IF NOT EXISTS worker_invocation_grants (
+    grant_id       TEXT PRIMARY KEY,              -- public random lookup id
+    token_digest   BLOB NOT NULL,                 -- SHA-256 of the 256-bit secret
+    task_id        TEXT NOT NULL,
+    run_id         INTEGER NOT NULL,
+    worker_pid     INTEGER,                       -- NULL while pending
+    proc_start     INTEGER,                       -- kernel start, microseconds
+    issued_at      INTEGER NOT NULL,
+    activated_at   INTEGER,
+    expires_at     INTEGER NOT NULL,
+    revoked_at     INTEGER,
+    CHECK ((activated_at IS NULL AND worker_pid IS NULL AND proc_start IS NULL)
+        OR (activated_at IS NOT NULL AND worker_pid IS NOT NULL AND proc_start IS NOT NULL))
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_status          ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_links_child           ON task_links(child_id);
@@ -1077,6 +1135,10 @@ CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_
 CREATE INDEX IF NOT EXISTS idx_worker_spawns_pid_start
     ON worker_spawns(worker_pid, proc_start);
 CREATE INDEX IF NOT EXISTS idx_worker_spawns_expires ON worker_spawns(expires_at);
+CREATE INDEX IF NOT EXISTS idx_worker_invocation_grants_expiry
+    ON worker_invocation_grants(expires_at);
+CREATE INDEX IF NOT EXISTS idx_worker_invocation_grants_subject
+    ON worker_invocation_grants(worker_pid, proc_start);
 """
 
 
@@ -1920,6 +1982,23 @@ def _end_run(
         (status or outcome, outcome, summary, error, _json_or_null(metadata), now, run_id),
     )
     conn.execute("UPDATE tasks SET current_run_id = NULL WHERE id = ?", (task_id,))
+    # Best-effort invalidation of any durable invocation grant(s) for this
+    # run (t_714420e1, design t_a1260456 section 3): the grant's own
+    # under-transaction status check (tasks.status/current_run_id,
+    # task_runs.status, all 'running') already denies the instant this
+    # commits, so this explicit revoke is defence-in-depth for a grant that
+    # somehow outlives that state check (e.g. a future caller that caches
+    # authority across transactions) -- never load-bearing on its own, and a
+    # failure here must never block the terminal transition it's riding on.
+    try:
+        from hermes_cli.kanban_invocation_authority import revoke_grants_for_run
+
+        revoke_grants_for_run(conn, task_id=task_id, run_id=run_id)
+    except Exception:
+        _log.debug(
+            "kanban: best-effort invocation-grant revoke failed for task %s run %s",
+            task_id, run_id, exc_info=True,
+        )
     return run_id
 
 
