@@ -110,14 +110,20 @@ class GatewayKanbanWatchersMixin:
 
     def _kanban_sub_op(self, board: Optional[str], op: str, sub: dict, **extra: Any) -> None:
         """Sync helper (runs in to_thread): call ``kanban_db_notify.<op>`` for one subscription on its board."""
+        from hermes_cli import kanban_authority_context as kac
         from hermes_cli import kanban_db_connect as _kbc
         from hermes_cli import kanban_db_notify as _kbn
         conn = _kbc.connect(board=board)
         try:
-            getattr(_kbn, op)(
-                conn, task_id=sub["task_id"], platform=sub["platform"], chat_id=sub["chat_id"],
-                thread_id=sub.get("thread_id") or "", **extra,
-            )
+            # D2 trusted authority context (design §8, t_c67e90a0): scoped
+            # to exactly this one notifier-owned queue/subscription write
+            # (advance/rewind/unsub), never to arbitrary task-content
+            # mutation.
+            with kac.gateway_notifier_authority():
+                getattr(_kbn, op)(
+                    conn, task_id=sub["task_id"], platform=sub["platform"], chat_id=sub["chat_id"],
+                    thread_id=sub.get("thread_id") or "", **extra,
+                )
         finally:
             conn.close()
 

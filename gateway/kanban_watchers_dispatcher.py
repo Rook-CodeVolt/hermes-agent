@@ -185,7 +185,14 @@ class _KanbanDispatcher:
             # No explicit init_db(): connect() runs the migration once per
             # process (see the matching note in the notifier collector).
             conn = _kbc().connect(board=slug)
-            return _kbd().dispatch_once(conn, board=slug, **kwargs)
+            # D1 trusted authority context (design §8, t_c67e90a0): scoped
+            # NARROWLY to this one dispatch tick's own dispatcher-owned
+            # writes (claim/reclaim/failure accounting/grant issuance), not
+            # to whatever the spawned worker itself later does under its
+            # own PID-bound grant.
+            from hermes_cli import kanban_authority_context as kac
+            with kac.dispatcher_authority():
+                return _kbd().dispatch_once(conn, board=slug, **kwargs)
         except Exception as exc:
             if self.is_corrupt_board_db_error(exc):
                 self.disabled_corrupt_boards[slug] = (fingerprint, time.monotonic())

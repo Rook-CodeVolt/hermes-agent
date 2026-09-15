@@ -724,9 +724,24 @@ def connect(db_path: Optional[Path] = None, *, board: Optional[str] = None) -> s
         def _init_if_needed(conn: sqlite3.Connection) -> None:
             # Idempotent; runs under _INIT_LOCK so same-process dispatcher
             # threads can't race the ALTER TABLE pass with stale PRAGMA snapshots.
+            #
+            # Invocation-authority note (design t_a1260456 §8/§9.13, cutover
+            # finding on t_c67e90a0): this schema/column-migration write is
+            # NOT requested by the calling process -- it runs transparently
+            # on the FIRST ``connect()`` to this DB path in this process's
+            # lifetime, entirely independent of whether the caller has (or
+            # will ever exercise) any Kanban mutation authority. Gating it
+            # behind the caller's own authority would make an
+            # unauthenticated READ-ONLY caller (C1's "read verbs and export
+            # remain available" guarantee) fail on its very first connect,
+            # before reaching a read at all. ``schema_migration_authority``
+            # is entered ONLY here, narrowly around this one internal write,
+            # and is never reachable from board/env/argv.
             if resolved not in _INITIALIZED_PATHS:
-                conn.executescript(_kb.SCHEMA_SQL)
-                _migrate_add_optional_columns(conn)
+                from hermes_cli import kanban_authority_context as kac
+                with kac.schema_migration_authority():
+                    conn.executescript(_kb.SCHEMA_SQL)
+                    _migrate_add_optional_columns(conn)
                 _INITIALIZED_PATHS.add(resolved)
 
         conn, _ = _open_configured(path, _init_if_needed)
@@ -1151,6 +1166,23 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
     ``add_comment``) opt in — helpers with post-commit side effects
     (``complete_task`` & co.) must never run under an open outer transaction,
     since those side effects would fire while the outer txn can still roll back.
+
+    Invocation-authority check (design t_a1260456 §5/§8, Phase A/B cutover
+    t_c67e90a0, inventory finding #1): the FINAL authority decision is made
+    and telemetered INSIDE this same ``BEGIN IMMEDIATE``/savepoint
+    transaction, immediately before the caller's first write -- not before
+    it, as a pre-check alone would leave a TOCTOU window in which a
+    concurrent revoke/reclaim could slip between check and write. The
+    interim kernel-ancestry guard (``_assert_not_delegated_child_mutation``)
+    still runs first, unconditionally, exactly as before -- this addition
+    is layered underneath it, not a replacement, per design §11 (the
+    interim guard remains available as fallback/telemetry until Phase B
+    acceptance). Phase A (:func:`kanban_invocation_authority.
+    record_authority_decision_telemetry`) always runs; Phase B enforcement
+    (actually denying the mutation) is gated on
+    :func:`kanban_invocation_authority.enforcement_enabled`, which defaults
+    OFF -- see that function's docstring for the sign-off this repo requires
+    before flipping it.
     """
     # Only hand a REAL sqlite3.Connection through to the delegated-child
     # guard's ancestry lookup. That lookup runs a SELECT against
@@ -1168,9 +1200,11 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
     # ambient-board resolution), it just can't use this specific object as
     # the board-scoped connection -- exactly the same as any other caller
     # that has no connection of its own yet.
-    _kb._assert_not_delegated_child_mutation(
-        conn if isinstance(conn, sqlite3.Connection) else None
-    )
+    real_conn = conn if isinstance(conn, sqlite3.Connection) else None
+    _kb._assert_not_delegated_child_mutation(real_conn)
+
+    from hermes_cli import kanban_invocation_authority as kia
+
     if getattr(conn, "in_transaction", False):
         if not allow_nested:
             raise RuntimeError(
@@ -1182,6 +1216,21 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
         savepoint = f"hermes_nested_{secrets.token_hex(8)}"
         conn.execute(f"SAVEPOINT {savepoint}")
         try:
+            # Nested composition inherits the OUTER transaction's already-
+            # verified authority (design §5: "nested transactions inherit a
+            # previously verified immutable authority only inside that
+            # transaction context; they must not re-resolve from ambient
+            # environment"). Falls back to a fresh decision only when no
+            # outer entry exists (a caller opened its own transaction
+            # outside this module and passed allow_nested=True directly).
+            decision = _TXN_AUTHORITY_CACHE.get(id(conn))
+            if decision is None:
+                decision = kia.decide_mutation_authority(real_conn)
+            kia.record_authority_decision_telemetry(decision, operation="write_txn.nested")
+            if kia.enforcement_enabled() and not decision.allowed:
+                raise PermissionError(
+                    f"kanban: mutation denied (invocation authority): {decision.deny_reason}"
+                )
             yield conn
         except Exception:
             with contextlib.suppress(sqlite3.OperationalError):
@@ -1194,6 +1243,16 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
 
     _execute_boundary_with_retry(conn, "BEGIN IMMEDIATE")
     try:
+        # Final authority check happens HERE, under the just-acquired
+        # IMMEDIATE lock, before the caller's first write -- see the
+        # docstring above and design §5.
+        decision = kia.decide_mutation_authority(real_conn)
+        _TXN_AUTHORITY_CACHE[id(conn)] = decision
+        kia.record_authority_decision_telemetry(decision, operation="write_txn")
+        if kia.enforcement_enabled() and not decision.allowed:
+            raise PermissionError(
+                f"kanban: mutation denied (invocation authority): {decision.deny_reason}"
+            )
         yield conn
     except Exception:
         # SQLite may already have auto-rolled-back (EIO, contention, corruption);
@@ -1212,6 +1271,25 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
             raise
         # Post-commit torn-extend check — raise now rather than silently corrupt.
         _check_file_length_invariant(conn)
+    finally:
+        # Owns the cache entry lifecycle (nested/savepoint calls only read
+        # it); always cleared regardless of commit/rollback/exception so a
+        # later, unrelated BEGIN IMMEDIATE on a recycled `id(conn)` (after
+        # this connection closes) can never see a stale decision.
+        _TXN_AUTHORITY_CACHE.pop(id(conn), None)
+
+
+# Per-outer-transaction cache of the verified invocation-authority decision
+# (kanban_invocation_authority.AuthorityDecision, imported lazily inside
+# write_txn to avoid a module-load cycle), keyed by `id(conn)`
+# (sqlite3.Connection accepts neither custom attributes nor weak references,
+# so an external dict is the only place to cache this). Only the OUTER
+# (non-nested) `write_txn` call in this same process writes or clears an
+# entry; nested/savepoint calls only ever read it. Safe because an entry's
+# `id(conn)` key is only ever looked up while that exact connection object
+# is alive (the outer call's own `finally` pops it before the connection
+# could be closed and its id potentially reused).
+_TXN_AUTHORITY_CACHE: dict[int, Any] = {}
 
 
 # Late-bound origin namespace (see module docstring); imported LAST so this

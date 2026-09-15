@@ -145,6 +145,36 @@ def _assert_not_delegated_child_mutation(
         raise PermissionError("delegate_task child contexts cannot mutate Kanban tasks or boards")
 
 
+def _require_board_pointer_mutation_authority() -> None:
+    """Authority gate for the board POINTER itself (``set_current_board`` /
+    ``clear_current_board``) -- design §5/§8 inventory row B1: these have no
+    target-board connection, so a worker's board-scoped invocation grant is
+    NEVER sufficient regardless of validity, distinct from every other
+    ``write_txn`` caller. Runs the same interim delegated-child guard first
+    (unconditional, unchanged), then Phase A telemetry + Phase B
+    enforcement using :func:`hermes_cli.kanban_authority_context.
+    board_pointer_authority_holder` instead of a worker grant lookup --
+    there is no board connection here to verify one against.
+    """
+    _assert_not_delegated_child_mutation()
+
+    from hermes_cli import kanban_authority_context as kac
+    from hermes_cli import kanban_invocation_authority as kia
+
+    holder = kac.board_pointer_authority_holder()
+    if holder is not None:
+        decision = kia.AuthorityDecision(allowed=True, authority_class=holder)
+    else:
+        decision = kia.AuthorityDecision(
+            allowed=False, authority_class="none", deny_reason="unadmitted-path",
+        )
+    kia.record_authority_decision_telemetry(decision, operation="board_pointer")
+    if kia.enforcement_enabled() and not decision.allowed:
+        raise PermissionError(
+            f"kanban: board pointer mutation denied (invocation authority): {decision.deny_reason}"
+        )
+
+
 def _fire_kanban_lifecycle_hook(event: str, task_id: str, **fields: Any) -> None:
     """Best-effort lifecycle hook. Call AFTER the write txn commits (plugins never
     run under the SQLite write lock, always see durable state); failures are
@@ -445,7 +475,7 @@ def get_current_board() -> str:
 def set_current_board(slug: str) -> Path:
     """Persist ``slug`` as the active board; returns the file written. Does NOT
     check the board exists — callers do (so ``boards switch <typo>`` errors)."""
-    _assert_not_delegated_child_mutation()
+    _require_board_pointer_mutation_authority()
     normed = _require_slug(slug)
     path = current_board_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -455,7 +485,7 @@ def set_current_board(slug: str) -> Path:
 
 def clear_current_board() -> None:
     """Remove ``<root>/kanban/current`` so the active board reverts to ``default``."""
-    _assert_not_delegated_child_mutation()
+    _require_board_pointer_mutation_authority()
     with contextlib.suppress(FileNotFoundError):
         current_board_path().unlink()
 
@@ -575,7 +605,7 @@ def write_board_metadata(
     """Create/update ``board.json``; unmentioned fields are preserved, ``created_at``
     set on first write. ``project_id``/``default_workdir``: ``None`` = unchanged,
     "" = clear (``project_id`` is not validated here)."""
-    _assert_not_delegated_child_mutation()
+    _require_board_pointer_mutation_authority()
     slug = _slug_or_default(board)
     meta = read_board_metadata(slug)
     # db_path is derived on every read; never persist it into board.json.

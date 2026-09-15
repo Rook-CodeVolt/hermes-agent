@@ -248,23 +248,28 @@ class _Collector:
             logger.debug("kanban notifier: cannot open board %s: %s", slug, exc)
             return
         try:
-            if self.gc_due:
-                self._gc_stale_subs(conn, slug)
-            # No explicit init_db(): connect() already runs the migration once per
-            # process, and init_db() would re-run it on a second connection racing
-            # the first.
-            subs = _kbn().list_notify_subs(conn, notifier_profiles=self.notifier_profiles, include_unowned=self.include_unowned)
-            if not subs:
-                logger.debug("kanban notifier: board %s has no subscriptions", slug)
-            for sub in subs:
-                try:
-                    claimed = self._claim_for_sub(conn, slug, sub)
-                    if claimed is not None:
-                        self.deliveries.append(claimed)
-                except Exception as sub_exc:
-                    # One bad subscription must not block the rest of the tick.
-                    logger.warning("kanban notifier: subscription for %s on board %s failed: %s",
-                                   sub.get("task_id"), slug, sub_exc)
+            # D2 trusted authority context (design §8, t_c67e90a0): scoped
+            # to this collector's own claim-cursor advance and stale-sub GC
+            # writes, never to arbitrary task-content mutation.
+            from hermes_cli import kanban_authority_context as kac
+            with kac.gateway_notifier_authority():
+                if self.gc_due:
+                    self._gc_stale_subs(conn, slug)
+                # No explicit init_db(): connect() already runs the migration once per
+                # process, and init_db() would re-run it on a second connection racing
+                # the first.
+                subs = _kbn().list_notify_subs(conn, notifier_profiles=self.notifier_profiles, include_unowned=self.include_unowned)
+                if not subs:
+                    logger.debug("kanban notifier: board %s has no subscriptions", slug)
+                for sub in subs:
+                    try:
+                        claimed = self._claim_for_sub(conn, slug, sub)
+                        if claimed is not None:
+                            self.deliveries.append(claimed)
+                    except Exception as sub_exc:
+                        # One bad subscription must not block the rest of the tick.
+                        logger.warning("kanban notifier: subscription for %s on board %s failed: %s",
+                                       sub.get("task_id"), slug, sub_exc)
         finally:
             conn.close()
 
