@@ -1064,6 +1064,34 @@ CREATE TABLE IF NOT EXISTS worker_spawns (
     expires_at  INTEGER NOT NULL
 );
 
+-- Durable per-invocation mutation authority (t_714420e1, design t_a1260456):
+-- a positive-allowlist replacement for kernel-ancestry authorization. A row
+-- here is minted PENDING by the dispatcher's own spawn path
+-- (kanban_db_dispatch._default_spawn) in the target board connection BEFORE
+-- Popen, then ACTIVATED immediately after Popen returns by binding it to the
+-- exact spawned child's (worker_pid, proc_start) -- both OS-reported, never
+-- supplied by the child. Unlike worker_spawns/kernel ancestry (a live
+-- process-tree fact erased by detach/reparent), authorization here depends
+-- only on this durable row plus the CALLING process's own current kernel
+-- identity, so a detached/reparented descendant is denied by PID/start
+-- mismatch rather than by a (defeatable) ancestry walk. See
+-- hermes_cli/kanban_invocation_authority.py for the full design note and
+-- verification contract.
+CREATE TABLE IF NOT EXISTS worker_invocation_grants (
+    grant_id       TEXT PRIMARY KEY,              -- public random lookup id
+    token_digest   BLOB NOT NULL,                 -- SHA-256 of the 256-bit secret
+    task_id        TEXT NOT NULL,
+    run_id         INTEGER NOT NULL,
+    worker_pid     INTEGER,                       -- NULL while pending
+    proc_start     INTEGER,                       -- kernel start, microseconds
+    issued_at      INTEGER NOT NULL,
+    activated_at   INTEGER,
+    expires_at     INTEGER NOT NULL,
+    revoked_at     INTEGER,
+    CHECK ((activated_at IS NULL AND worker_pid IS NULL AND proc_start IS NULL)
+        OR (activated_at IS NOT NULL AND worker_pid IS NOT NULL AND proc_start IS NOT NULL))
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_status          ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_links_child           ON task_links(child_id);
@@ -1077,6 +1105,10 @@ CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_
 CREATE INDEX IF NOT EXISTS idx_worker_spawns_pid_start
     ON worker_spawns(worker_pid, proc_start);
 CREATE INDEX IF NOT EXISTS idx_worker_spawns_expires ON worker_spawns(expires_at);
+CREATE INDEX IF NOT EXISTS idx_worker_invocation_grants_expiry
+    ON worker_invocation_grants(expires_at);
+CREATE INDEX IF NOT EXISTS idx_worker_invocation_grants_subject
+    ON worker_invocation_grants(worker_pid, proc_start);
 """
 
 
@@ -1920,6 +1952,23 @@ def _end_run(
         (status or outcome, outcome, summary, error, _json_or_null(metadata), now, run_id),
     )
     conn.execute("UPDATE tasks SET current_run_id = NULL WHERE id = ?", (task_id,))
+    # Best-effort invalidation of any durable invocation grant(s) for this
+    # run (t_714420e1, design t_a1260456 section 3): the grant's own
+    # under-transaction status check (tasks.status/current_run_id,
+    # task_runs.status, all 'running') already denies the instant this
+    # commits, so this explicit revoke is defence-in-depth for a grant that
+    # somehow outlives that state check (e.g. a future caller that caches
+    # authority across transactions) -- never load-bearing on its own, and a
+    # failure here must never block the terminal transition it's riding on.
+    try:
+        from hermes_cli.kanban_invocation_authority import revoke_grants_for_run
+
+        revoke_grants_for_run(conn, task_id=task_id, run_id=run_id)
+    except Exception:
+        _log.debug(
+            "kanban: best-effort invocation-grant revoke failed for task %s run %s",
+            task_id, run_id, exc_info=True,
+        )
     return run_id
 
 

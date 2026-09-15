@@ -23,6 +23,18 @@ DELEGATED_CHILD_ENV_MARKER = "HERMES_DELEGATED_CHILD_CONTEXT"
 KANBAN_ENV_KEYS: tuple[str, ...] = (
     "HERMES_KANBAN_TASK", "HERMES_KANBAN_RUN_ID", "HERMES_KANBAN_CLAIM_LOCK",
     "HERMES_KANBAN_GOAL_MODE", "HERMES_KANBAN_GOAL_MAX_TURNS",
+    # Durable per-invocation mutation authority token (t_714420e1, design
+    # t_a1260456 section 6): scrubbed from every child env alongside worker
+    # identity for the same reason -- the token is bound to the WORKER's own
+    # (pid, kernel-start) so an inherited copy is already useless to a
+    # descendant (self-identity mismatch denies it), but it must never be
+    # left lying around in a child's environment regardless; security here
+    # does not depend on successful scrubbing, only on the PID/start bind.
+    # Literal string, not imported from hermes_cli.kanban_invocation_authority,
+    # to avoid a reverse agent -> hermes_cli import (hermes_cli already
+    # imports this module) -- keep this in sync with that module's
+    # GRANT_ENV_VAR constant.
+    "HERMES_KANBAN_INVOCATION_GRANT",
 )
 
 
