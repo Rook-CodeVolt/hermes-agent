@@ -9,6 +9,8 @@ import re
 import shlex
 from typing import Iterable
 
+from agent.delegation_context import DELEGATED_CHILD_ENV_MARKER, KANBAN_ENV_KEYS
+
 # Bridged per-session vars (gateway.session_context._VAR_MAP) are injected fresh onto every
 # command's process env and must NEVER persist in the shared bash snapshot: one long-lived
 # backend serves many sessions, so a snapshot carrying the FIRST session's HERMES_SESSION_ID
@@ -26,9 +28,22 @@ from typing import Iterable
 # only carry the user's own shell state (PATH, functions, exports they set), not Hermes' per-turn session
 # identity. Used by unit tests as the Python-side contract for the exclusion set; the dump path unsets by
 # name/prefix instead of grepping declare lines (see below / issue #71296).
+#
+# HERMES_DELEGATED_CHILD_CONTEXT (the delegate_task child-process marker, see
+# agent.delegation_context) is excluded for the same reason: a delegate_task child's os.environ
+# carries the marker, and if the FIRST command on the shared snapshot ran inside that child
+# context, every LATER genuinely-top-level command sourcing the snapshot would be misclassified
+# as a delegated child (e.g. wrongly blocking Kanban writes). The 5 exact KANBAN_ENV_KEYS names
+# (worker identity: TASK/RUN_ID/CLAIM_LOCK/GOAL_MODE/GOAL_MAX_TURNS) are excluded for the same
+# stale-snapshot-leak reason. HERMES_KANBAN_BOARD/HERMES_KANBAN_DB are deliberately NOT excluded —
+# they identify board/location, not worker identity (see agent.delegation_context.scrub_kanban_env
+# docstring) — so a blanket HERMES_KANBAN_* prefix must not be used here. Both names are imported
+# from agent.delegation_context (the single source of truth) rather than hardcoded a second time,
+# so this exclusion list and that module's own scrubbing cannot drift apart.
 _SNAPSHOT_EXCLUDED_ENV_REGEX = (
     "^declare -x (HERMES_SESSION_|HERMES_UI_SESSION_ID|HERMES_CRON_AUTO_DELIVER_|"
-    "HERMES_CRON_SESSION|HERMES_BROWSER_CONTROL_)")
+    "HERMES_CRON_SESSION|HERMES_BROWSER_CONTROL_|" + DELEGATED_CHILD_ENV_MARKER + "|"
+    + "|".join(re.escape(name) for name in KANBAN_ENV_KEYS) + ")")
 _SHELL_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # mktemp template suffix + the shell variable holding the allocated temp path.
@@ -65,6 +80,10 @@ def _export_dump_excluding_session_vars(tmp_path: str, excluded_names: Iterable[
     # become shell syntax (valid names stay unquoted by shlex.quote()).
     safe_names = {name for name in excluded_names if isinstance(name, str) and name}
     extra_unset = "".join(f" {shlex.quote(name)}" for name in sorted(safe_names))
+    # DELEGATED_CHILD_ENV_MARKER + KANBAN_ENV_KEYS are exact names (not prefixes), unset
+    # explicitly by name for the same reason HERMES_UI_SESSION_ID is: the regex above documents
+    # the Python-side contract, but this is the actual dump-time strip.
+    identity_unset = "".join(f" {shlex.quote(name)}" for name in (DELEGATED_CHILD_ENV_MARKER, *KANBAN_ENV_KEYS))
     return (
         "{ ( unset ${!HERMES_SESSION_*} ${!HERMES_CRON_AUTO_DELIVER_*} "
         "${!HERMES_BROWSER_CONTROL_*} "
@@ -72,7 +91,7 @@ def _export_dump_excluding_session_vars(tmp_path: str, excluded_names: Iterable[
         # by every wrapper with ${VAR:-default} semantics; persisting them would
         # let the FIRST command's value override a later outer-harness value.
         "AI_AGENT HERMES_AGENT "
-        f"HERMES_UI_SESSION_ID{extra_unset} 2>/dev/null; "
+        f"HERMES_UI_SESSION_ID{identity_unset}{extra_unset} 2>/dev/null; "
         "export -p; ) || true; } "
         f"> {tmp_path}")
 

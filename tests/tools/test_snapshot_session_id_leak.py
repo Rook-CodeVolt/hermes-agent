@@ -107,3 +107,68 @@ def test_shared_snapshot_no_cross_session_leak(tmp_path):
                 assert "HERMES_SESSION_ID" not in f.read()
     finally:
         env.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Regression: HERMES_DELEGATED_CHILD_CONTEXT / KANBAN_ENV_KEYS leak via the
+# shared bash snapshot (t_594fe921, design review t_5f704f40).
+#
+# Root cause: identical shape to the HERMES_SESSION_ID leak above, but for the
+# delegate_task child-process marker and the 5 kanban worker-identity vars. A
+# delegate_task child's real subprocess env carries HERMES_DELEGATED_CHILD_CONTEXT=1
+# (injected by agent.delegation_context.delegated_child_subprocess_env once the
+# ContextVar set by ``delegated_child_context()`` is observed). If a command run
+# inside that scope is the one that (re-)dumps the shared snapshot, every LATER
+# genuinely-top-level command sharing the same cached bash session would source
+# that stale marker and be wrongly classified as a delegated child (e.g. blocking
+# Kanban writes) — this was confirmed live: 34/81 hermes-snap-*.sh files on the
+# operating host carried the stale marker before this fix.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX bash snapshot path")
+def test_shared_snapshot_no_delegated_child_or_kanban_identity_leak(tmp_path):
+    from agent.delegation_context import DELEGATED_CHILD_ENV_MARKER, KANBAN_ENV_KEYS, delegated_child_context
+    from tools.environments.local import LocalEnvironment
+
+    env = LocalEnvironment(cwd=str(tmp_path), timeout=30)
+    env.init_session()
+    try:
+        # First command runs INSIDE a delegate_task child context, exactly as a
+        # delegate_task() call would execute its child's tool commands. The
+        # command's own subprocess env picks up the marker (and has the kanban
+        # identity vars scrubbed) via delegated_child_subprocess_env; the snapshot
+        # re-dump at the end of this command must not persist the marker.
+        with delegated_child_context():
+            child_result = env.execute(
+                'echo "child_marker=${HERMES_DELEGATED_CHILD_CONTEXT:-NOT_SET}"'
+            )
+        assert "child_marker=1" in child_result.get("output", ""), (
+            f"sanity check failed: delegated_child_context() should make the child "
+            f"command's own subprocess see the marker: {child_result!r}"
+        )
+
+        # Second command is genuinely top-level (scope has exited, ContextVar reset)
+        # on the SAME session/snapshot file. It must see the marker and every kanban
+        # identity var as unset, not the delegated child's leaked values.
+        checks = " ".join(
+            f'echo "{name}=${{{name}:-NOT_SET}}"' for name in (DELEGATED_CHILD_ENV_MARKER, *KANBAN_ENV_KEYS)
+        )
+        top_level_result = env.execute(checks)
+        output = top_level_result.get("output", "")
+        for name in (DELEGATED_CHILD_ENV_MARKER, *KANBAN_ENV_KEYS):
+            assert f"{name}=NOT_SET" in output, (
+                f"snapshot leaked {name} into a genuinely top-level command: {output!r}"
+            )
+
+        # And the on-disk snapshot file itself must not carry any of these names.
+        snap = env._snapshot_path
+        if os.path.exists(snap):
+            with open(snap) as f:
+                contents = f.read()
+            for name in (DELEGATED_CHILD_ENV_MARKER, *KANBAN_ENV_KEYS):
+                assert name not in contents, (
+                    f"snapshot file {snap!r} still contains {name!r}: leaks into every "
+                    f"later top-level command sharing this cached bash session"
+                )
+    finally:
+        env.cleanup()
