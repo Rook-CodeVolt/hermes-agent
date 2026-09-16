@@ -10,6 +10,7 @@ import shlex
 from typing import Iterable
 
 from agent.delegation_context import DELEGATED_CHILD_ENV_MARKER, KANBAN_ENV_KEYS
+from hermes_cli.kanban_invocation_authority import ENFORCEMENT_ENV_VAR
 
 # Bridged per-session vars (gateway.session_context._VAR_MAP) are injected fresh onto every
 # command's process env and must NEVER persist in the shared bash snapshot: one long-lived
@@ -40,9 +41,27 @@ from agent.delegation_context import DELEGATED_CHILD_ENV_MARKER, KANBAN_ENV_KEYS
 # docstring) — so a blanket HERMES_KANBAN_* prefix must not be used here. Both names are imported
 # from agent.delegation_context (the single source of truth) rather than hardcoded a second time,
 # so this exclusion list and that module's own scrubbing cannot drift apart.
+#
+# HERMES_KANBAN_INVOCATION_AUTHORITY_ENFORCE (hermes_cli.kanban_invocation_authority
+# .ENFORCEMENT_ENV_VAR) is excluded for a DIFFERENT reason than the vars above, but via the same
+# mechanism: it is not per-session/per-worker identity, it is a global POLICY flag meant to be
+# either uniformly on or uniformly off across every process on the host (t_255d78c0 rollout put it
+# in every profile's ~/.hermes/.env precisely so it is process-independent). The live incident this
+# guards against (t_99ee91ca): a session's snapshot dump ran once while ONLY that session's shell had
+# the var exported (e.g. mid-rollout, or a caller that explicitly set/unset it for a one-off test);
+# every LATER command sharing that cached snapshot then re-sourced that stale value regardless of
+# the var's current, intended, global .env-driven state — silently flipping enforcement on or off
+# for that session out of step with the rest of the host. Because this flag gates every Kanban
+# mutation (default-deny once on), an unintended flip either wrongly denies ordinary administration
+# (as hit live) or, in the opposite direction, could leave a session silently unenforced after a
+# rollback. Snapshot-sourcing must never be a side channel for this decision; the ONLY authoritative
+# source is each fresh process's own os.environ as loaded from .env at interpreter startup. Imported
+# from hermes_cli.kanban_invocation_authority (the single source of truth for the name) rather than
+# hardcoded a second time, matching the DELEGATED_CHILD_ENV_MARKER/KANBAN_ENV_KEYS precedent above.
 _SNAPSHOT_EXCLUDED_ENV_REGEX = (
     "^declare -x (HERMES_SESSION_|HERMES_UI_SESSION_ID|HERMES_CRON_AUTO_DELIVER_|"
     "HERMES_CRON_SESSION|HERMES_BROWSER_CONTROL_|" + DELEGATED_CHILD_ENV_MARKER + "|"
+    + ENFORCEMENT_ENV_VAR + "|"
     + "|".join(re.escape(name) for name in KANBAN_ENV_KEYS) + ")")
 _SHELL_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -80,10 +99,12 @@ def _export_dump_excluding_session_vars(tmp_path: str, excluded_names: Iterable[
     # become shell syntax (valid names stay unquoted by shlex.quote()).
     safe_names = {name for name in excluded_names if isinstance(name, str) and name}
     extra_unset = "".join(f" {shlex.quote(name)}" for name in sorted(safe_names))
-    # DELEGATED_CHILD_ENV_MARKER + KANBAN_ENV_KEYS are exact names (not prefixes), unset
-    # explicitly by name for the same reason HERMES_UI_SESSION_ID is: the regex above documents
-    # the Python-side contract, but this is the actual dump-time strip.
-    identity_unset = "".join(f" {shlex.quote(name)}" for name in (DELEGATED_CHILD_ENV_MARKER, *KANBAN_ENV_KEYS))
+    # DELEGATED_CHILD_ENV_MARKER + KANBAN_ENV_KEYS + ENFORCEMENT_ENV_VAR are exact names (not
+    # prefixes), unset explicitly by name for the same reason HERMES_UI_SESSION_ID is: the regex
+    # above documents the Python-side contract, but this is the actual dump-time strip.
+    identity_unset = "".join(
+        f" {shlex.quote(name)}"
+        for name in (DELEGATED_CHILD_ENV_MARKER, ENFORCEMENT_ENV_VAR, *KANBAN_ENV_KEYS))
     return (
         "{ ( unset ${!HERMES_SESSION_*} ${!HERMES_CRON_AUTO_DELIVER_*} "
         "${!HERMES_BROWSER_CONTROL_*} "

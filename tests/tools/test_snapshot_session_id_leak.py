@@ -64,6 +64,28 @@ def test_export_snippet_shape():
     assert snippet.rstrip().endswith('> "$__hermes_snap_tmp"')
 
 
+def test_regex_matches_delegated_child_kanban_identity_and_enforcement_vars():
+    """Exact-name contract for the t_594fe921 + t_99ee91ca exclusions: every one of
+    DELEGATED_CHILD_ENV_MARKER / KANBAN_ENV_KEYS / ENFORCEMENT_ENV_VAR must match the regex, and
+    a name that merely shares a prefix (not an exact match) must NOT -- this is a positive
+    allowlist of exact identity/policy vars, not a blanket HERMES_KANBAN_* strip (HERMES_KANBAN_
+    BOARD/DB are board/location, not identity, and must keep surviving in the snapshot)."""
+    from agent.delegation_context import DELEGATED_CHILD_ENV_MARKER, KANBAN_ENV_KEYS
+    from hermes_cli.kanban_invocation_authority import ENFORCEMENT_ENV_VAR
+
+    rx = re.compile(_SNAPSHOT_EXCLUDED_ENV_REGEX)
+    for name in (DELEGATED_CHILD_ENV_MARKER, ENFORCEMENT_ENV_VAR, *KANBAN_ENV_KEYS):
+        line = f'declare -x {name}="whatever"'
+        assert rx.search(line), f"{name} should be excluded from the snapshot"
+
+    for untouched in ("HERMES_KANBAN_BOARD", "HERMES_KANBAN_DB"):
+        line = f'declare -x {untouched}="whatever"'
+        assert not rx.search(line), (
+            f"{untouched} identifies board/location, not identity/policy, and must "
+            f"survive in the snapshot -- a blanket HERMES_KANBAN_* prefix must not be used"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Integration: real LocalEnvironment, two sessions, no cross-contamination.
 # ---------------------------------------------------------------------------
@@ -142,7 +164,12 @@ def test_shared_snapshot_no_delegated_child_or_kanban_identity_leak(tmp_path):
             child_result = env.execute(
                 'echo "child_marker=${HERMES_DELEGATED_CHILD_CONTEXT:-NOT_SET}"'
             )
-        assert "child_marker=1" in child_result.get("output", ""), (
+        child_output = child_result.get("output", "")
+        # The marker's value is the fenced kanban board ROOT (agent.delegation_context.
+        # scrub_kanban_env), not a literal "1" -- a later fix (t_11e8c077) generalized it from a
+        # bare flag to a path so descendant fencing can be scoped to the lineage's own board. The
+        # sanity check only needs "the child saw *some* marker value", not its exact shape.
+        assert "child_marker=NOT_SET" not in child_output and "child_marker=" in child_output, (
             f"sanity check failed: delegated_child_context() should make the child "
             f"command's own subprocess see the marker: {child_result!r}"
         )
@@ -170,5 +197,65 @@ def test_shared_snapshot_no_delegated_child_or_kanban_identity_leak(tmp_path):
                     f"snapshot file {snap!r} still contains {name!r}: leaks into every "
                     f"later top-level command sharing this cached bash session"
                 )
+    finally:
+        env.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Regression: HERMES_KANBAN_INVOCATION_AUTHORITY_ENFORCE leak via the shared bash snapshot
+# (t_99ee91ca, same leak class as t_594fe921 above but for a var that did not exist yet when that
+# fix shipped).
+#
+# Root cause: identical shape to the leak above, but for the Phase B kanban invocation-authority
+# global enforcement flag (hermes_cli.kanban_invocation_authority.ENFORCEMENT_ENV_VAR). Unlike the
+# per-worker identity vars above, this flag is a global POLICY setting meant to be uniformly set (or
+# not) via every profile's ~/.hermes/.env -- but if a command that happens to run with the var set
+# in its own environment is the one that (re-)dumps the shared snapshot, every LATER command sharing
+# that cached session sources that stale value regardless of the var's actual current .env-driven
+# state. Hit live (Rook's own persistent session, t_255d78c0 comment @ 2026-09-16 07:57): after the
+# var was rolled into every profile .env as part of closing the C1 interactive-CLI gap, the session's
+# snapshot picked it up via the standard export -p re-dump and began re-exporting it into every
+# subsequent tool-call subprocess, incorrectly denying ordinary kanban administration.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX bash snapshot path")
+def test_shared_snapshot_no_invocation_authority_enforce_leak(tmp_path):
+    from hermes_cli.kanban_invocation_authority import ENFORCEMENT_ENV_VAR
+    from tools.environments.local import LocalEnvironment
+
+    env = LocalEnvironment(cwd=str(tmp_path), timeout=30)
+    env.init_session()
+    try:
+        # First command exports the enforcement flag in ITS OWN bash session (simulating a caller
+        # that explicitly set/tested it, or a stale ambient value inherited from an outer process)
+        # -- not via the snapshot. The snapshot re-dump at the END of this command is the actual
+        # leak surface under test: it must not persist the export the command just made.
+        set_result = env.execute(
+            f'export {ENFORCEMENT_ENV_VAR}=1; echo "enforce_marker=${{{ENFORCEMENT_ENV_VAR}:-NOT_SET}}"'
+        )
+        assert "enforce_marker=1" in set_result.get("output", ""), (
+            f"sanity check failed: the command's own shell should see the var it just "
+            f"exported: {set_result!r}"
+        )
+
+        # Second command is genuinely top-level on the SAME session/snapshot file, with no var set
+        # of its own. It must see the flag as unset, not the first command's leaked value -- a leak
+        # here would silently flip Kanban mutation enforcement on or off for every later command.
+        top_level_result = env.execute(f'echo "enforce_marker=${{{ENFORCEMENT_ENV_VAR}:-NOT_SET}}"')
+        output = top_level_result.get("output", "")
+        assert "enforce_marker=NOT_SET" in output, (
+            f"snapshot leaked {ENFORCEMENT_ENV_VAR} into a genuinely top-level command: {output!r}"
+        )
+
+        # And the on-disk snapshot file itself must not carry the name.
+        snap = env._snapshot_path
+        if os.path.exists(snap):
+            with open(snap) as f:
+                contents = f.read()
+            assert ENFORCEMENT_ENV_VAR not in contents, (
+                f"snapshot file {snap!r} still contains {ENFORCEMENT_ENV_VAR!r}: leaks into "
+                f"every later top-level command sharing this cached bash session, silently "
+                f"changing whether kanban mutations are enforced/denied for that session"
+            )
     finally:
         env.cleanup()
