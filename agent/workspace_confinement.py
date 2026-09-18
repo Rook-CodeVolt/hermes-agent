@@ -45,7 +45,7 @@ from typing import Any, Callable, Iterable
 # weaker flag is sufficient because every intermediate component is opened
 # individually by the descriptor chain below.
 O_NOFOLLOW_ANY = 0x20000000 if sys.platform == "darwin" else 0
-_NOFOLLOW = O_NOFOLLOW_ANY or os.O_NOFOLLOW
+_NOFOLLOW = O_NOFOLLOW_ANY or getattr(os, 'O_NOFOLLOW', 0)
 
 _TEMP_PREFIX = ".hermes-confined-"
 
@@ -229,7 +229,7 @@ class _DirChain:
         if not ok:
             raise ConfinementError(f"workspace failed verification: {reason}")
         try:
-            root = os.open(str(workspace), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            root = os.open(str(workspace), os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0))
         except OSError as exc:
             raise ConfinementError(f"cannot open workspace {workspace}: {exc}") from exc
         self._fds.append(root)
