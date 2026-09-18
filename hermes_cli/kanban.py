@@ -592,6 +592,18 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     p_unlink.add_argument("parent_id")
     p_unlink.add_argument("child_id")
 
+    # --- supersede ---
+    p_supersede = sub.add_parser(
+        "supersede",
+        help="Atomically replace outgoing dependencies while preserving old task history",
+    )
+    p_supersede.add_argument("old_task_id")
+    p_supersede.add_argument("replacement_task_id")
+    p_supersede.add_argument(
+        "--json", action="store_true",
+        help="Emit JSON (structured) instead of the default human summary",
+    )
+
     # --- claim ---
     p_claim = sub.add_parser(
         "claim",
@@ -1158,6 +1170,7 @@ def kanban_command(args: argparse.Namespace) -> int:
             "diag":     _cmd_diagnostics,
             "link":     _cmd_link,
             "unlink":   _cmd_unlink,
+            "supersede": _cmd_supersede,
             "claim":    _cmd_claim,
             "comment":  _cmd_comment,
             "attach":   _cmd_attach,
@@ -1227,6 +1240,7 @@ _DELEGATED_CHILD_DENIED_ACTIONS: frozenset[str] = frozenset({
     "reassign",
     "link",
     "unlink",
+    "supersede",
     "claim",
     "comment",
     "attach",
@@ -2180,6 +2194,24 @@ def _cmd_unlink(args: argparse.Namespace) -> int:
         print(f"No such link: {args.parent_id} -> {args.child_id}", file=sys.stderr)
         return 1
     print(f"Unlinked {args.parent_id} -> {args.child_id}")
+    return 0
+
+
+def _cmd_supersede(args: argparse.Namespace) -> int:
+    with kb.connect_closing() as conn:
+        receipt = kb.supersede_task(
+            conn,
+            args.old_task_id,
+            args.replacement_task_id,
+            actor=_profile_author(),
+        )
+    if getattr(args, "json", False):
+        print(json.dumps(receipt, indent=2, ensure_ascii=False))
+    else:
+        print(
+            f"Superseded {args.old_task_id} with {args.replacement_task_id}; "
+            f"replaced {len(receipt['children'])} outgoing dependency edge(s)"
+        )
     return 0
 
 
