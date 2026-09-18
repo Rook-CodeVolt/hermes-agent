@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,7 +53,7 @@ def _make_running_kanban_task(monkeypatch, tmp_path):
         )
         claim = kb.claim_task(conn, tid)
         assert claim is not None
-        run_id = claim.id
+        run_id = claim.current_run_id
     finally:
         conn.close()
 
@@ -171,6 +172,534 @@ def test_delegate_child_execute_code_env_bridges_contextvar_and_scrubs_kanban(
     assert "HERMES_KANBAN_DB" not in env
     assert "HERMES_KANBAN_WORKSPACE" not in env
     assert "HERMES_KANBAN_CLAIM_LOCK" not in env
+
+
+
+
+def _kanban_cli(*argv: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    code = (
+        "import argparse,sys; from hermes_cli import kanban; "
+        "p=argparse.ArgumentParser(); s=p.add_subparsers(dest='cmd'); "
+        "kanban.build_parser(s); a=p.parse_args(sys.argv[1:]); "
+        "raise SystemExit(kanban.kanban_command(a))"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code, "kanban", *argv],
+        env=env,
+        cwd=str(_REPO_ROOT),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=20,
+        check=False,
+    )
+
+
+def test_real_cli_marker_strip_still_cannot_mutate_from_worker_descendant(monkeypatch, tmp_path):
+    """A real subprocess cannot turn missing marker text into write authority."""
+    kb, tid, _workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    from hermes_cli import kanban_db_connect as kbc
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+
+    env = os.environ.copy()
+    env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+    env.pop("HERMES_KANBAN_TASK", None)
+    env.pop("HERMES_KANBAN_RUN_ID", None)
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+    result = _kanban_cli("comment", tid, "forbidden", env=env)
+
+    assert result.returncode == 1, result.stdout
+    assert "delegate_task child contexts cannot mutate Kanban" in result.stdout
+    with kbc.connect_closing() as conn:
+        assert kb.list_comments(conn, tid) == []
+
+
+def test_real_cli_rejects_free_form_author_spoof(monkeypatch, tmp_path):
+    """Mutating CLI commands no longer accept caller-selected audit identities."""
+    kb, tid, _workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    env = os.environ.copy()
+    env.pop("HERMES_KANBAN_TASK", None)
+    env.pop("HERMES_KANBAN_RUN_ID", None)
+    env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+
+    result = _kanban_cli("comment", tid, "spoof", "--author", "maya", env=env)
+
+    assert result.returncode == 2, result.stdout
+    assert "unrecognized arguments: --author maya" in result.stdout
+    from hermes_cli import kanban_db_connect as kbc
+    with kbc.connect_closing() as conn:
+        assert kb.list_comments(conn, tid) == []
+
+
+def _bind_current_process_as_worker(kb, tid, run_id, workspace, db_path):
+    """Mint + consume a real worker identity for THIS test process, exactly as
+    a real dispatcher worker would have it bound at startup."""
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+    from hermes_cli import kanban_db_identity as kbi
+
+    with kbc.connect_closing(db_path=Path(db_path)) as conn:
+        token = kbi.issue_worker_identity(
+            conn, task_id=tid, run_id=run_id, workspace_path=str(workspace), worker_pid=os.getpid(),
+        )
+    return di.bind_token(token, db_path=str(db_path))
+
+
+def test_worker_own_terminal_subprocess_mutation_succeeds_with_no_delegation_markers(
+    monkeypatch, tmp_path,
+):
+    """The primary supported worker-mutation path: a real dispatcher worker's
+    own ``terminal`` tool shelling out to ``hermes kanban ...`` must still be
+    able to mutate its own task, even though the subprocess inherits no
+    ContextVar, no delegation marker and no consumable handshake token (that
+    was already single-use-consumed at the worker's own startup).
+
+    This is the missing counterpart to
+    ``test_real_cli_marker_strip_still_cannot_mutate_from_worker_descendant``,
+    which only proves the (correct) denial half. Regression coverage for the
+    fix that closes Maya's changes-requested finding on commit 4be3d28601.
+    """
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+
+    kb, tid, workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    db_path = str(kb.kanban_db_path())
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+        run_id = conn.execute(
+            "SELECT current_run_id FROM tasks WHERE id = ?", (tid,)
+        ).fetchone()["current_run_id"]
+
+    di.reset_for_tests()
+    try:
+        _bind_current_process_as_worker(kb, tid, int(run_id), workspace, db_path)
+
+        env = os.environ.copy()
+        env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+        env.pop("HERMES_KANBAN_TASK", None)
+        env.pop("HERMES_KANBAN_RUN_ID", None)
+        env.pop(di.HANDSHAKE_FD_ENV, None)
+        env["PYTHONPATH"] = str(_REPO_ROOT)
+
+        # The exact production call: LocalEnvironment._finalize_child_env is
+        # what every terminal-tool subprocess spawn runs through.
+        from tools.environments.local import _finalize_child_env
+        env = _finalize_child_env(env)
+
+        assert di.SUBPROCESS_CREDENTIAL_ENV in env, (
+            "a worker with a live identity binding must mint a subprocess "
+            "credential for its own terminal-tool child"
+        )
+
+        result = _kanban_cli("comment", tid, "allowed", env=env)
+    finally:
+        di.reset_for_tests()
+
+    assert result.returncode == 0, result.stdout
+    with kbc.connect_closing() as conn:
+        comments = kb.list_comments(conn, tid)
+    assert [c.body for c in comments] == ["allowed"]
+
+
+def test_delegate_task_child_cannot_mint_or_forge_subprocess_credential(monkeypatch, tmp_path):
+    """The original abuse case must still fail closed after the fix: a
+    delegate_task child inherits no dispatcher identity, so it can neither
+    mint a real subprocess credential nor have one injected for it, and a
+    hand-forged value in the credential env var must not validate."""
+    from agent import dispatcher_identity as di
+    from agent.delegation_context import delegated_child_context
+
+    kb, tid, _workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    from hermes_cli import kanban_db_connect as kbc
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+
+    di.reset_for_tests()
+    try:
+        with delegated_child_context():
+            assert di.mint_subprocess_credential() is None
+
+        env = os.environ.copy()
+        env.pop("HERMES_KANBAN_TASK", None)
+        env.pop("HERMES_KANBAN_RUN_ID", None)
+        env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+        env["PYTHONPATH"] = str(_REPO_ROOT)
+        env[di.SUBPROCESS_CREDENTIAL_ENV] = "0" * 64  # forged, never issued by any DB
+
+        result = _kanban_cli("comment", tid, "forbidden", env=env)
+    finally:
+        di.reset_for_tests()
+
+    assert result.returncode == 1, result.stdout
+    assert "delegate_task child contexts cannot mutate Kanban" in result.stdout
+    with kbc.connect_closing() as conn:
+        assert kb.list_comments(conn, tid) == []
+
+
+def test_subprocess_credential_cannot_replay_across_tasks_same_board(monkeypatch, tmp_path):
+    """A subprocess credential minted for worker-on-task-A's own terminal
+    shell-out must not authorise mutating an unrelated task B on the same
+    board. Regression for the cross-task bearer-token replay Maya
+    independently reproduced against commit b40b5669b0 (BLOCK on
+    t_6211a9dd, remediated by t_df2c4900): the credential row now carries
+    (and ``find_valid_subprocess_credential``/``_assert_not_delegated_child_mutation``
+    now check) the exact ``task_id`` it was minted for.
+    """
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+
+    kb_mod, tid_a, workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    db_path = str(kb_mod.kanban_db_path())
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid_a))
+        conn.commit()
+        run_id = conn.execute(
+            "SELECT current_run_id FROM tasks WHERE id = ?", (tid_a,)
+        ).fetchone()["current_run_id"]
+        tid_b = kb_mod.create_task(
+            conn, title="victim", assignee="parent-worker",
+            workspace_kind="scratch", workspace_path=str(workspace),
+        )
+
+    di.reset_for_tests()
+    try:
+        _bind_current_process_as_worker(kb_mod, tid_a, int(run_id), workspace, db_path)
+
+        env = os.environ.copy()
+        env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+        env.pop("HERMES_KANBAN_TASK", None)
+        env.pop("HERMES_KANBAN_RUN_ID", None)
+        env.pop(di.HANDSHAKE_FD_ENV, None)
+        env["PYTHONPATH"] = str(_REPO_ROOT)
+
+        from tools.environments.local import _finalize_child_env
+        env = _finalize_child_env(env)
+        assert di.SUBPROCESS_CREDENTIAL_ENV in env
+
+        # Sanity: the same credential still authorises its OWN task.
+        allowed = _kanban_cli("comment", tid_a, "own task ok", env=env)
+        assert allowed.returncode == 0, allowed.stdout
+
+        # The exploit: replay the IDENTICAL credential against a DIFFERENT
+        # task on the same board.
+        result = _kanban_cli("comment", tid_b, "cross-task replay", env=env)
+    finally:
+        di.reset_for_tests()
+
+    assert result.returncode == 1, result.stdout
+    assert "delegate_task child contexts cannot mutate Kanban" in result.stdout
+    with kbc.connect_closing() as conn:
+        assert kb_mod.list_comments(conn, tid_b) == []
+
+
+def test_subprocess_credential_cannot_validate_against_different_board(monkeypatch, tmp_path):
+    """A subprocess credential minted while board 'default' (aliased here as
+    the effectively-alpha board) is current must not validate when checked
+    directly against a connection to a wholly different board 'beta', even
+    though both boards live under the same HERMES_HOME. Regression for the
+    cross-board validation-fallback exploit Maya independently reproduced
+    against commit b40b5669b0 (BLOCK on t_6211a9dd, remediated by
+    t_df2c4900): the multi-board probe in
+    ``validate_subprocess_credential`` is now used ONLY when the caller
+    passes no ``conn`` of its own; a caller that supplies its own board's
+    ``conn`` (the normal ``write_txn`` case) never widens past it.
+    """
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+
+    kb_mod, tid, workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    db_path = str(kb_mod.kanban_db_path())
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+        run_id = conn.execute(
+            "SELECT current_run_id FROM tasks WHERE id = ?", (tid,)
+        ).fetchone()["current_run_id"]
+
+    kb_mod.create_board("beta")
+    beta_path = kb_mod.kanban_db_path("beta")
+
+    di.reset_for_tests()
+    try:
+        _bind_current_process_as_worker(kb_mod, tid, int(run_id), workspace, db_path)
+        token = di.mint_subprocess_credential()
+        assert token
+
+        # Sanity: the credential is genuinely live against its OWN (default) board.
+        with kbc.connect_closing() as own_conn:
+            assert di.validate_subprocess_credential(token, own_conn) is True
+
+        # The credential row exists ONLY in the default board's DB file.
+        with kbc.connect_closing(db_path=beta_path) as beta_conn:
+            row = beta_conn.execute(
+                "SELECT COUNT(*) AS n FROM worker_subprocess_credentials"
+            ).fetchone()
+            assert row["n"] == 0
+
+            # The exploit: validate the SAME token directly against beta's
+            # own connection -- must fail, not silently widen to a global probe.
+            assert di.validate_subprocess_credential(token, beta_conn) is False
+    finally:
+        di.reset_for_tests()
+
+
+def _worker_own_board_admin_env(di, db_path):
+    """Build a subprocess env exactly as a real ``terminal``-tool child of a
+    dispatcher worker would receive it, INCLUDING ``HERMES_KANBAN_DB`` pinned
+    to the worker's own board DB the way
+    ``hermes_cli.kanban_db_dispatch._default_spawn`` sets it for every real
+    worker (``env["HERMES_KANBAN_DB"] = str(_kb.kanban_db_path(board=board))``).
+
+    A prior version of this fixture built the env via a bare
+    ``os.environ.copy()`` inside a pytest process that never has
+    ``HERMES_KANBAN_DB`` set -- unrepresentative of a real worker, and
+    exactly why the vendor test for 1bdc8403c9 missed the env-override
+    bypass Maya found: ``kanban_db_path(board=X)`` consults
+    ``HERMES_KANBAN_DB`` BEFORE its ``board`` argument, so any caller that
+    inherits the worker's own pinned value resolves the WORKER'S OWN board
+    DB, not the admin action's target board, regardless of what ``board``
+    scoping the credential check itself claims to apply.
+    """
+    env = os.environ.copy()
+    env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+    env.pop("HERMES_KANBAN_TASK", None)
+    env.pop("HERMES_KANBAN_RUN_ID", None)
+    env.pop(di.HANDSHAKE_FD_ENV, None)
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+    # The exact real-worker differentiator: HERMES_KANBAN_DB pinned to the
+    # worker's OWN board db, inherited unmodified by this terminal-tool
+    # subprocess (only delegate_task children get it scrubbed).
+    env["HERMES_KANBAN_DB"] = str(db_path)
+
+    from tools.environments.local import _finalize_child_env
+    env = _finalize_child_env(env)
+    assert di.SUBPROCESS_CREDENTIAL_ENV in env
+    return env
+
+
+def test_worker_subprocess_credential_cannot_authorise_admin_action_on_different_board(
+    monkeypatch, tmp_path,
+):
+    """A worker subprocess credential minted while working on board 'default'
+    must not authorise a board-ADMIN action (``boards rm``) targeting an
+    unrelated board 'victim', via the real ``terminal`` -> ``hermes kanban
+    boards rm <slug> --delete`` shell-out path, WITH ``HERMES_KANBAN_DB``
+    pinned to the worker's own board db exactly as a real dispatcher worker's
+    terminal-tool subprocess always has it
+    (``hermes_cli.kanban_db_dispatch._default_spawn`` sets it, and
+    ``_finalize_child_env`` only scrubs it for ``delegate_task`` children).
+
+    Regression for the cross-board admin-authority bypass found in a fresh
+    independent review of commit d977234b54 (BLOCK on t_6211a9dd): the
+    retained ``conn is None`` multi-board fallback in
+    ``validate_subprocess_credential`` let a credential minted for a worker
+    bound to a task on ANY board authorise ``remove_board``/
+    ``set_current_board``/``clear_current_board``/``write_board_metadata``
+    against ANY other board on the host, because those call sites invoked
+    ``_assert_not_delegated_child_mutation()`` with neither ``conn`` nor a
+    target board slug even though ``remove_board(slug)`` and friends always
+    have one.
+
+    SECOND regression (Maya's fresh review of 1bdc8403c9, commit under this
+    test): even after threading the target slug into the guard, the
+    ``board=`` scoping was a NO-OP under this exact real-worker env, because
+    ``validate_subprocess_credential`` resolved the target board's DB via
+    ``kanban_db.kanban_db_path(board=X)``, which checks ``HERMES_KANBAN_DB``
+    BEFORE consulting ``X`` -- so it resolved the WORKER'S OWN board db
+    instead, found the legitimately-present credential row there, and
+    authorised the action against the UNRELATED target board anyway. The fix
+    resolves the target board's db via a slug-only path
+    (``kanban_db.board_db_path_no_env_override``) that never consults
+    ``HERMES_KANBAN_DB``/``HERMES_KANBAN_BOARD``.
+    """
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+
+    kb, tid, workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    db_path = str(kb.kanban_db_path())
+    kb.create_board("victim")
+    assert kb.board_exists("victim")
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+        run_id = conn.execute(
+            "SELECT current_run_id FROM tasks WHERE id = ?", (tid,)
+        ).fetchone()["current_run_id"]
+
+    di.reset_for_tests()
+    try:
+        _bind_current_process_as_worker(kb, tid, int(run_id), workspace, db_path)
+        env = _worker_own_board_admin_env(di, db_path)
+
+        # The exploit: the exact repro from the card -- "hermes kanban boards
+        # rm <slug> --delete" against an UNRELATED board using this worker's
+        # own-task credential, in a subprocess env with HERMES_KANBAN_DB
+        # pinned to the worker's own board (the real-worker condition).
+        result = _kanban_cli("boards", "rm", "victim", "--delete", env=env)
+    finally:
+        di.reset_for_tests()
+
+    assert result.returncode == 1, result.stdout
+    assert "delegate_task child contexts cannot mutate Kanban" in result.stdout
+    assert kb.board_exists("victim"), "cross-board admin action must fail closed and leave the board intact"
+
+
+def test_worker_subprocess_credential_cannot_switch_to_different_board(
+    monkeypatch, tmp_path,
+):
+    """Sibling coverage for ``set_current_board`` (``hermes kanban boards
+    switch <slug>``): same real-worker env (``HERMES_KANBAN_DB`` pinned to
+    the worker's own board db) must still fail closed against an unrelated
+    target board."""
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+
+    kb, tid, workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    db_path = str(kb.kanban_db_path())
+    kb.create_board("victim2")
+    assert kb.board_exists("victim2")
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+        run_id = conn.execute(
+            "SELECT current_run_id FROM tasks WHERE id = ?", (tid,)
+        ).fetchone()["current_run_id"]
+
+    di.reset_for_tests()
+    try:
+        _bind_current_process_as_worker(kb, tid, int(run_id), workspace, db_path)
+        env = _worker_own_board_admin_env(di, db_path)
+
+        result = _kanban_cli("boards", "switch", "victim2", env=env)
+    finally:
+        di.reset_for_tests()
+
+    assert result.returncode == 1, result.stdout
+    assert "delegate_task child contexts cannot mutate Kanban" in result.stdout
+    # The persisted "current board" pointer lives under kanban_home(), not
+    # under either board's own DB -- assert it was never written.
+    assert not kb.current_board_path().exists() or kb.current_board_path().read_text().strip() != "victim2"
+
+
+def test_worker_subprocess_credential_cannot_rename_different_board(
+    monkeypatch, tmp_path,
+):
+    """Sibling coverage for ``write_board_metadata`` via ``hermes kanban
+    boards rename <slug> <name>``: same real-worker env must fail closed
+    against an unrelated target board."""
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+
+    kb, tid, workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    db_path = str(kb.kanban_db_path())
+    kb.create_board("victim3")
+    assert kb.board_exists("victim3")
+    original_name = kb.read_board_metadata("victim3")["name"]
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+        run_id = conn.execute(
+            "SELECT current_run_id FROM tasks WHERE id = ?", (tid,)
+        ).fetchone()["current_run_id"]
+
+    di.reset_for_tests()
+    try:
+        _bind_current_process_as_worker(kb, tid, int(run_id), workspace, db_path)
+        env = _worker_own_board_admin_env(di, db_path)
+
+        result = _kanban_cli("boards", "rename", "victim3", "Pwned", env=env)
+    finally:
+        di.reset_for_tests()
+
+    assert result.returncode == 1, result.stdout
+    assert "delegate_task child contexts cannot mutate Kanban" in result.stdout
+    assert kb.read_board_metadata("victim3")["name"] == original_name
+
+
+def test_worker_subprocess_credential_cannot_set_default_workdir_on_different_board(
+    monkeypatch, tmp_path,
+):
+    """Sibling coverage for ``write_board_metadata`` via ``hermes kanban
+    boards set-default-workdir <slug> <path>``: same real-worker env must
+    fail closed against an unrelated target board."""
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+
+    kb, tid, workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    db_path = str(kb.kanban_db_path())
+    kb.create_board("victim4")
+    assert kb.board_exists("victim4")
+    original_workdir = kb.read_board_metadata("victim4").get("default_workdir")
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+        run_id = conn.execute(
+            "SELECT current_run_id FROM tasks WHERE id = ?", (tid,)
+        ).fetchone()["current_run_id"]
+
+    di.reset_for_tests()
+    try:
+        _bind_current_process_as_worker(kb, tid, int(run_id), workspace, db_path)
+        env = _worker_own_board_admin_env(di, db_path)
+
+        result = _kanban_cli(
+            "boards", "set-default-workdir", "victim4", str(tmp_path / "pwned"), env=env,
+        )
+    finally:
+        di.reset_for_tests()
+
+    assert result.returncode == 1, result.stdout
+    assert "delegate_task child contexts cannot mutate Kanban" in result.stdout
+    assert kb.read_board_metadata("victim4").get("default_workdir") == original_workdir
+
+
+def test_worker_subprocess_credential_still_authorises_admin_action_on_own_board(
+    monkeypatch, tmp_path,
+):
+    """Positive control for the four denial tests above: the SAME real-worker
+    env (``HERMES_KANBAN_DB`` pinned to the worker's own board db) must still
+    authorise a board-admin action when the target board IS the worker's own
+    -- the fix must not turn same-board admin actions into a false-positive
+    denial. Uses ``rename`` on the ``default`` board itself.
+    """
+    from agent import dispatcher_identity as di
+    from hermes_cli import kanban_db_connect as kbc
+
+    kb, tid, workspace, _attachments_root = _make_running_kanban_task(monkeypatch, tmp_path)
+    db_path = str(kb.kanban_db_path())
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), tid))
+        conn.commit()
+        run_id = conn.execute(
+            "SELECT current_run_id FROM tasks WHERE id = ?", (tid,)
+        ).fetchone()["current_run_id"]
+
+    di.reset_for_tests()
+    try:
+        _bind_current_process_as_worker(kb, tid, int(run_id), workspace, db_path)
+        env = _worker_own_board_admin_env(di, db_path)
+
+        result = _kanban_cli("boards", "rename", "default", "My Own Board", env=env)
+    finally:
+        di.reset_for_tests()
+
+    assert result.returncode == 0, result.stdout
+    assert kb.read_board_metadata("default")["name"] == "My Own Board"
 
 
 def test_delegate_child_kanban_cli_cannot_delete_parent_board(

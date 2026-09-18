@@ -264,6 +264,27 @@ def _filter_secret_env(
             out[key] = value
 
 
+def _inject_worker_subprocess_credential(env: dict) -> None:
+    """Give this worker's own (non-delegated) subprocess a positive credential
+    proving legitimate dispatcher-worker authority, so the officially
+    documented ``terminal`` -> ``hermes kanban ...`` shell-out fallback is not
+    caught by the denial-only process-ancestry check in
+    ``_assert_not_delegated_child_mutation``.
+
+    No-op (and no DB write) for every process without a live, revalidated
+    dispatcher-worker identity -- ordinary interactive sessions, cron jobs,
+    and (critically) ``delegate_task`` children all fall through silently,
+    because ``mint_subprocess_credential`` returns ``None`` for each of them.
+    """
+    try:
+        from agent.dispatcher_identity import SUBPROCESS_CREDENTIAL_ENV, mint_subprocess_credential
+        token = mint_subprocess_credential()
+        if token:
+            env[SUBPROCESS_CREDENTIAL_ENV] = token
+    except Exception:
+        pass
+
+
 def _finalize_child_env(env: dict) -> dict:
     """Guards shared by every spawn surface: profile-home propagation, session-context
     bridging, Hermes-owned PYTHONPATH + venv-marker strip, MSYS defaults, delegate_task
@@ -278,6 +299,7 @@ def _finalize_child_env(env: dict) -> dict:
             return scrub_kanban_env(env)
     except Exception:
         pass
+    _inject_worker_subprocess_credential(env)
     return env
 
 
