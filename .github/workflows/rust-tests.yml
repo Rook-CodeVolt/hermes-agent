@@ -30,8 +30,12 @@ jobs:
     # cargo builds codegen units and test binaries in parallel across the
     # cores. This lane also builds the crate from the start when Cargo.toml
     # changes.
-    runs-on: ubuntu-latest-32-core
-    timeout-minutes: 30
+    #
+    # This contribution fork uses the standard hosted runner. The upstream
+    # 32-core label is not provisioned for personal forks and otherwise
+    # leaves this required lane queued indefinitely.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: apps/bootstrap-installer/src-tauri
