@@ -124,23 +124,47 @@ def exit_non_dispatcher_owned_context(token: Token[bool]) -> None:
 def is_delegated_child_process_context() -> bool:
     """Return True in this process or a subprocess spawned by a child.
 
-    The ContextVar always wins: it is scoped per-execution and never leaks
-    across unrelated in-process work. The ``os.environ`` marker is only a
-    fallback for genuine fresh-subprocess boundaries (a real child process
-    that inherited the marker but has neither ContextVar set). A process that
-    once spawned a ``delegate_task`` subprocess permanently carries that
-    marker in its own ``os.environ`` afterwards (subprocess env inheritance),
-    so an in-process, non-dispatcher-owned execution (e.g. a cron tick via
-    ``enter_non_dispatcher_owned_context``) must not be misread as a
-    delegated child just because of a stale marker from an unrelated earlier
-    subprocess spawn.
+    This is the Kanban-mutation trust boundary
+    (``hermes_cli/kanban_db.py::_assert_not_delegated_child_mutation`` and
+    ``hermes_cli/kanban.py``'s CLI-dispatch guard read it directly), so it
+    must never be overridable by in-process, unauthenticated code. Only two
+    signals are consulted, and neither can be flipped by a caller that does
+    not itself own a fresh-subprocess or ``delegate_task`` boundary:
+
+    * ``_DELEGATED_CHILD_CONTEXT`` — set only by :func:`delegated_child_context`,
+      which ``tools/delegate_tool.py`` enters around an actual child agent's
+      turn. Always wins: it is scoped per-execution and never leaks across
+      unrelated in-process work.
+    * ``DELEGATED_CHILD_ENV_MARKER`` in ``os.environ`` — the fallback for a
+      genuine fresh-subprocess boundary (a real child process that inherited
+      the marker but has neither ContextVar set, because ContextVars don't
+      cross a fork/exec).
+
+    ``_NON_DISPATCHER_OWNED_CONTEXT`` (see :func:`non_dispatcher_owned_context`
+    / :func:`enter_non_dispatcher_owned_context`) answers a different,
+    narrower question — "does this in-process execution own the *dispatcher's
+    Kanban task identity*" — via :func:`is_dispatcher_owned_worker_context`.
+    It is deliberately NOT consulted here: it is set by cron ticks and other
+    in-process, non-dispatcher work, and any of that code can reach
+    ``enter_non_dispatcher_owned_context()`` itself (it is unauthenticated and
+    module-level). Wiring it into this predicate let a genuine delegated
+    child self-clear its own delegated-child verdict by simply calling
+    ``enter_non_dispatcher_owned_context()`` in-process — a confused-deputy
+    privilege escalation past the Kanban-mutation guard (reported in PR #35
+    review). See ``tests/agent/test_delegation_context.py::
+    test_non_dispatcher_owned_context_cannot_override_established_delegated_child_verdict``.
+
+    The genuine "stale env marker outlives its originating subprocess spawn"
+    bug this module previously tried to fix here belongs at the source
+    instead: ``hermes_cli/kanban_db.py::_default_spawn`` now scrubs
+    ``DELEGATED_CHILD_ENV_MARKER`` from a freshly-dispatched worker's env,
+    since a dispatcher-spawned Kanban worker is by construction never itself
+    delegate_task-child lineage.
     """
     import os
 
     if _DELEGATED_CHILD_CONTEXT.get():
         return True
-    if _NON_DISPATCHER_OWNED_CONTEXT.get():
-        return False  # in-process cron/non-dispatcher execution overrides a stale env marker
     return bool(os.environ.get(DELEGATED_CHILD_ENV_MARKER))
 
 

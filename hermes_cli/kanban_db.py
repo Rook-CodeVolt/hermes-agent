@@ -10751,6 +10751,24 @@ def _default_spawn(
     from gateway.session_context import _VAR_MAP
     for key in _VAR_MAP:
         env.pop(key, None)
+    # Scrub a stale delegate_task lineage marker from the freshly-dispatched
+    # worker's env. A dispatcher process that has, at any point in its life,
+    # spawned a delegate_task child whose subprocess env carried
+    # HERMES_DELEGATED_CHILD_CONTEXT=1 (agent.delegation_context.scrub_kanban_env)
+    # can end up with that var in its OWN os.environ afterwards through normal
+    # env-copy call sites elsewhere. `env = dict(os.environ)` above would then
+    # carry it forward into every subsequent Kanban worker this dispatcher
+    # spawns, permanently mis-marking a brand-new, genuinely dispatcher-owned
+    # worker as a delegated child and blocking it from Kanban mutation
+    # (agent/delegation_context.py::is_delegated_child_process_context /
+    # hermes_cli/kanban_db.py::_assert_not_delegated_child_mutation). A worker
+    # spawned here is by construction never delegate_task-child lineage, so
+    # drop the marker at the source rather than teaching the trust-boundary
+    # predicate to distrust its own env marker (see the confused-deputy
+    # regression fixed in agent/delegation_context.py::
+    # is_delegated_child_process_context).
+    from agent.delegation_context import DELEGATED_CHILD_ENV_MARKER
+    env.pop(DELEGATED_CHILD_ENV_MARKER, None)
 
     # Inject HERMES_HOME so the worker reads the profile-scoped config.yaml
     # (fallback_providers, toolsets, agent settings, etc.) instead of the root
