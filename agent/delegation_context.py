@@ -122,12 +122,26 @@ def exit_non_dispatcher_owned_context(token: Token[bool]) -> None:
 
 
 def is_delegated_child_process_context() -> bool:
-    """Return True in this process or a subprocess spawned by a child."""
+    """Return True in this process or a subprocess spawned by a child.
+
+    The ContextVar always wins: it is scoped per-execution and never leaks
+    across unrelated in-process work. The ``os.environ`` marker is only a
+    fallback for genuine fresh-subprocess boundaries (a real child process
+    that inherited the marker but has neither ContextVar set). A process that
+    once spawned a ``delegate_task`` subprocess permanently carries that
+    marker in its own ``os.environ`` afterwards (subprocess env inheritance),
+    so an in-process, non-dispatcher-owned execution (e.g. a cron tick via
+    ``enter_non_dispatcher_owned_context``) must not be misread as a
+    delegated child just because of a stale marker from an unrelated earlier
+    subprocess spawn.
+    """
     import os
 
-    return bool(_DELEGATED_CHILD_CONTEXT.get()) or bool(
-        os.environ.get(DELEGATED_CHILD_ENV_MARKER)
-    )
+    if _DELEGATED_CHILD_CONTEXT.get():
+        return True
+    if _NON_DISPATCHER_OWNED_CONTEXT.get():
+        return False  # in-process cron/non-dispatcher execution overrides a stale env marker
+    return bool(os.environ.get(DELEGATED_CHILD_ENV_MARKER))
 
 
 def scrub_kanban_env(env: Mapping[str, str] | MutableMapping[str, str]) -> dict[str, str]:
