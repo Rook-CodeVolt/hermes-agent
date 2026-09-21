@@ -1,10 +1,13 @@
 # Dependabot configuration for hermes-agent.
 #
-# This contribution-only fork follows dependency versions from upstream.
-# Routine version-update pull requests are therefore disabled here. The
-# repository's separately configured Dependabot alerts and security updates
-# remain enabled so vulnerability findings and security-update coverage are
-# retained. No source-dependency ecosystems are configured in this fork.
+# This contribution-only fork follows source-dependency versions from upstream,
+# so pip and npm version-update schedules are intentionally not duplicated here.
+#
+# GitHub Actions are the exception. Workflow references are pinned to full commit
+# SHAs, and GitHub does not generate Dependabot alerts for SHA-versioned Actions.
+# Weekly github-actions version updates therefore remain enabled as the owned,
+# observable control for reviewing new Action SHAs. Repository-level Dependabot
+# alerts and security updates do not replace this update stream.
 
 version: 2
 updates:
@@ -13,10 +16,17 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "github-actions"
     commit-message:
       prefix: "chore(actions)"
       include: "scope"
+    groups:
+      # Batch routine action bumps into one PR per week to reduce noise.
+      # Security updates still open individually and bypass grouping.
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
