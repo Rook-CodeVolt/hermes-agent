@@ -745,6 +745,7 @@ hermes kanban schedule <id> --at <ISO8601>             # set/clear a task's sche
 hermes kanban diagnostics [--json]                     # board health snapshot (alias: diag)
 hermes kanban link <parent_id> <child_id>
 hermes kanban unlink <parent_id> <child_id>
+hermes kanban supersede <old_id> <replacement_id> [--json] # atomically replace outgoing edges and preserve old history
 hermes kanban claim <id> [--ttl SECONDS]
 hermes kanban comment <id> "<text>" [--author NAME]
 
@@ -786,6 +787,8 @@ hermes kanban gc [--event-retention-days N]            # workspaces + old events
 All commands are also available as a slash command in the interactive CLI and in the messaging gateway (see [`/kanban` slash command](#kanban-slash-command) below).
 
 `--max-retries` is a per-task circuit-breaker override for the dispatcher. `--max-retries 1` blocks the task on the first non-successful attempt, while `--max-retries 3` allows two retries and blocks on the third failure. Omit it to use `kanban.failure_limit` from `config.yaml`, then the built-in default.
+
+A manual `kanban unblock` / `kanban_unblock` always resets the task's `consecutive_failures` counter to zero, by design — a deliberate unblock is a human judgment call that the prior failure(s) were transient/environmental, so it gives the task a fresh retry budget rather than resuming a tripped breaker with memory. This means a `--max-retries 1` task can legitimately consume more than one dispatch attempt when a human unblocks it between failures; that is expected operator-driven behavior, not a circuit-breaker accounting defect.
 
 ### Concurrency, scheduling, and child promotion config
 

@@ -1,0 +1,356 @@
+name: PR15 standard-runner evidence (no-spend)
+
+# STANDALONE, MANUALLY-DISPATCHED DIAGNOSTIC WORKFLOW. Not part of the
+# repository's normal CI graph and not wired into branch protection.
+#
+# Purpose: gather standard-runner (ubuntu-latest / windows-latest) unit-test
+# and OS-test evidence for the exact immutable PR15 head below, because the
+# real run (34425319208) shows "Python tests / Run tests" and
+# "OS-specific tests / Windows-only tests" both stuck red/queued at the
+# 24h timeout on this repository's paid ubuntu-latest-96-core /
+# windows-latest-32-core runners. This workflow re-runs the equivalent,
+# unweakened repository commands on the free standard runners instead, so
+# the lanes actually execute and produce a verdict. It deliberately does
+# NOT touch, rerun, or supersede run 34425319208 itself.
+#
+# The e2e suite is already known-red in that run ("Python tests / e2e",
+# 48s). It is kept in its own separate job here — never merged into the
+# unit-test job or gated ahead of it — so that known failure cannot mask or
+# short-circuit the standard unit/OS evidence this workflow exists to
+# produce. Every job reports its own independent GitHub Actions check.
+#
+# Immutable target (hardcoded, not a workflow_dispatch input, so it cannot
+# be redirected at dispatch time):
+#   head: 85a37db08ede6aa193f2bf4a590f8b732cbb4ed8
+#   tree: 776734ae5751cc4998f57cd675c0f62eb00df3a3
+#   PR:   Rook-CodeVolt/hermes-agent#15 (ci/f2-candidate-795b96b)
+#
+# Least-privilege / no-spend posture:
+#   - permissions: contents: read only (no PR comments, no SARIF upload,
+#     no security-events, no pull-requests writes — this workflow only
+#     reads the pinned commit and runs tests).
+#   - actions/checkout persist-credentials: false in every job — no step
+#     in this workflow needs an authenticated git token.
+#   - Only ubuntu-latest / windows-latest (standard, free-tier-eligible
+#     runners on this public repository). No *-96-core / *-32-core /
+#     self-hosted / larger runner is referenced anywhere in this file.
+#   - No actions/cache, no actions/upload-artifact, no other step that
+#     could persist a secret-bearing cache or artifact. Nothing in this
+#     workflow ever reads a real secret, so there is nothing to leak.
+#   - Every provider/API key env var the test suite checks for is
+#     hardcoded blank, matching tests/conftest.py's own hermetic-env
+#     blanking belt-and-suspenders pattern.
+#   - Every job carries a bounded timeout-minutes.
+#   - Full-SHA-pinned third-party actions only, using the exact pins this
+#     repository already carries at the target commit (actions/checkout
+#     @de0fac2e..., astral-sh/setup-uv@fac544c0...). Local composite
+#     actions (./.github/actions/retry) are used as-is from the pinned
+#     checkout, per existing repository convention.
+#   - Test commands are reproduced verbatim from the pinned commit's own
+#     .github/workflows/tests.yml and tests-os.yml (uv sync flags,
+#     scripts/run_tests.sh, scripts/ci/list_os_marked_tests.py + the exact
+#     pytest marker expression) — nothing is skipped, loosened, or
+#     re-selected to dodge a known failure.
+
+on:
+  workflow_dispatch: {}
+  # No inputs: the target head/tree are fixed constants below, not
+  # operator-suppliable input, so a dispatch cannot be pointed anywhere
+  # else. Dispatch this workflow from the default branch (main), where its
+  # workflow_dispatch trigger is registered; each job still explicitly
+  # checks out and asserts the pinned historical commit regardless of
+  # which ref the dispatch UI/API call was made from.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr15-standard-runner-evidence
+  cancel-in-progress: false
+
+env:
+  # Immutable target, single source of truth for every job's assertion
+  # step below.
+  TARGET_HEAD: 85a37db08ede6aa193f2bf4a590f8b732cbb4ed8
+  TARGET_TREE: 776734ae5751cc4998f57cd675c0f62eb00df3a3
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────
+  # Fail closed before any lane spends runner time: check out the pinned
+  # commit and assert both its full commit SHA and its full tree SHA match
+  # the immutable target. Every other job repeats this same assertion
+  # after its own independent checkout (defense in depth across runners/
+  # OSes), but gating here means a mismatch is caught in under a minute
+  # instead of after a 30-120 minute lane.
+  # ────────────────────────────────────────────────────────────────────────
+  verify-pinned-commit:
+    name: Verify pinned head + tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout pinned commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 85a37db08ede6aa193f2bf4a590f8b732cbb4ed8
+          persist-credentials: false
+
+      - name: Assert exact head and tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_head="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse HEAD^{tree})"
+          echo "expected head: ${TARGET_HEAD}"
+          echo "actual head:   ${actual_head}"
+          echo "expected tree: ${TARGET_TREE}"
+          echo "actual tree:   ${actual_tree}"
+          if [ "${actual_head}" != "${TARGET_HEAD}" ]; then
+            echo "::error::HEAD mismatch — refusing to run any lane against an unexpected commit"
+            exit 1
+          fi
+          if [ "${actual_tree}" != "${TARGET_TREE}" ]; then
+            echo "::error::TREE mismatch — refusing to run any lane against an unexpected tree"
+            exit 1
+          fi
+          echo "pinned head and tree verified exactly"
+
+  # ─────────────────────────────────────────────────
+  # Standard-runner Linux unit tests. Same install + run commands as the
+  # pinned commit's .github/workflows/tests.yml "test" job, minus the
+  # 96-core-specific HERMES_TEST_WORKERS override and minus any cache
+  # (see file header). Runs on the free ubuntu-latest runner instead of
+  # ubuntu-latest-96-core.
+  # ──────────────────────────────────────────────────────────────
+  unit-tests-ubuntu-latest:
+    name: Unit tests (ubuntu-latest, standard)
+    needs: verify-pinned-commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout pinned commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 85a37db08ede6aa193f2bf4a590f8b732cbb4ed8
+          persist-credentials: false
+
+      - name: Assert exact head and tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_head="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse HEAD^{tree})"
+          if [ "${actual_head}" != "${TARGET_HEAD}" ] || [ "${actual_tree}" != "${TARGET_TREE}" ]; then
+            echo "::error::pinned commit mismatch on this runner — aborting before install"
+            exit 1
+          fi
+
+      - name: Install ripgrep (prebuilt binary)
+        # Verbatim from the pinned commit's tests.yml: some tests spawn rg.
+        run: |
+          set -euo pipefail
+          RG_VERSION=15.1.0
+          RG_SHA256=1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599
+          RG_TARBALL=ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl.tar.gz
+          curl -sSfL --retry 3 --retry-delay 5 -o "$RG_TARBALL" \
+            "https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}/${RG_TARBALL}"
+          echo "${RG_SHA256}  ${RG_TARBALL}" | sha256sum -c -
+          tar -xzf "$RG_TARBALL"
+          sudo mv "ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl/rg" /usr/local/bin/rg
+          rm -rf "$RG_TARBALL" "ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl"
+          rg --version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          # No enable-cache: this is a one-shot diagnostic dispatch, not a
+          # repeating CI lane, and the file header's no-caches posture
+          # applies here rather than being weighed against warm-cache speed.
+
+      - name: Set up Python 3.11
+        uses: ./.github/actions/retry
+        with:
+          command: uv python install 3.11
+
+      - name: Install dependencies
+        # Exact extras list from the pinned commit's tests.yml "test" job.
+        uses: ./.github/actions/retry
+        with:
+          command: uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web
+
+      - name: Run tests
+        # Identical invocation to tests.yml's "Run tests" step
+        # (scripts/run_tests.sh: per-file isolated pytest subprocesses).
+        # No slicing, no -k filter, no marker exclusion beyond what the
+        # script and pyproject addopts already apply — nothing skipped.
+        run: |
+          source .venv/bin/activate
+          scripts/run_tests.sh
+        env:
+          # Let the standard 2-core runner auto-size its own worker count
+          # (run_tests.sh defaults to cpu_count*2); the 96 override in the
+          # repository's own lane is specific to that 96-core runner.
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Standard-runner Windows OS-marked tests. Same selection + run logic as
+  # the pinned commit's .github/workflows/tests-os.yml "windows-only tests"
+  # matrix leg, but on the free windows-latest runner instead of
+  # windows-latest-32-core. desktop_updater is left at its workflow_call
+  # default (true) — matching that workflow's own documented fail-open
+  # behaviour for push/dispatch triggers ("Push / dispatch runs fail open
+  # (classifier sets every lane true)").
+  # ──────────────────────────────────────────────────────────────────────
+  unit-tests-windows-latest:
+    name: Unit tests (windows-latest, standard)
+    needs: verify-pinned-commit
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout pinned commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 85a37db08ede6aa193f2bf4a590f8b732cbb4ed8
+          persist-credentials: false
+
+      - name: Assert exact head and tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_head="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse HEAD^{tree})"
+          if [ "${actual_head}" != "${TARGET_HEAD}" ] || [ "${actual_tree}" != "${TARGET_TREE}" ]; then
+            echo "::error::pinned commit mismatch on this runner — aborting before install"
+            exit 1
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+
+      - name: Set up Python 3.11
+        uses: ./.github/actions/retry
+        with:
+          command: uv python install 3.11
+
+      - name: Install dependencies
+        # Exact extras list from the pinned commit's tests-os.yml job.
+        uses: ./.github/actions/retry
+        with:
+          command: uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web
+
+      - name: Run windows_only tests
+        # Reproduced verbatim from tests-os.yml's "Run ${{ matrix.marker }}
+        # tests" step with matrix.marker fixed to windows_only and
+        # inputs.desktop_updater fixed to its own true default — the exact
+        # two-step selection (list_os_marked_tests.py narrows imported
+        # files, -m stays the authoritative selector) and the same
+        # zero-tests-selected hard-failure guard.
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          LIST="${RUNNER_TEMP:-.}/selected-tests.txt"
+
+          if ! uv run --no-sync python scripts/ci/list_os_marked_tests.py \
+             windows_only > "$LIST"; then
+            echo "::error::could not enumerate windows_only test files"
+            exit 1
+          fi
+          if [ ! -s "$LIST" ]; then
+            echo "::error::empty windows_only file list"
+            exit 1
+          fi
+
+          set -- $(cat "$LIST")
+          echo "selected $# file(s) for windows_only:"
+          cat "$LIST"
+
+          status=0
+          uv run --no-sync python -m pytest \
+            "$@" \
+            -m "windows_only and not integration" \
+            -v --tb=short || status=$?
+          if [ "$status" -eq 5 ]; then
+            echo "::error::No tests matched -m windows_only. Either the marker" \
+                 "was renamed/dropped or selection is broken — this job must" \
+                 "never pass without running its OS's tests."
+            exit 1
+          fi
+          exit "$status"
+        env:
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+
+  # ───────────────────────────────────────────────────────────────
+  # e2e — deliberately its own job, gated only on the same pinned-commit
+  # check, never on the two unit-test jobs above and never merged into
+  # them. Run 34425319208 already shows this suite red in 48s; isolating
+  # it here means that known failure reports as its own independent
+  # GitHub Actions check and cannot mask or block the standard-runner
+  # unit/OS evidence the other two jobs exist to produce.
+  # ───────────────────────────────────────────────────────────────
+  e2e-ubuntu-latest:
+    name: E2E (ubuntu-latest, standard, known-failing lane kept isolated)
+    needs: verify-pinned-commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout pinned commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 85a37db08ede6aa193f2bf4a590f8b732cbb4ed8
+          persist-credentials: false
+
+      - name: Assert exact head and tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_head="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse HEAD^{tree})"
+          if [ "${actual_head}" != "${TARGET_HEAD}" ] || [ "${actual_tree}" != "${TARGET_TREE}" ]; then
+            echo "::error::pinned commit mismatch on this runner — aborting before install"
+            exit 1
+          fi
+
+      - name: Install ripgrep (prebuilt binary)
+        run: |
+          set -euo pipefail
+          RG_VERSION=15.1.0
+          RG_SHA256=1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599
+          RG_TARBALL=ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl.tar.gz
+          curl -sSfL --retry 3 --retry-delay 5 -o "$RG_TARBALL" \
+            "https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}/${RG_TARBALL}"
+          echo "${RG_SHA256}  ${RG_TARBALL}" | sha256sum -c -
+          tar -xzf "$RG_TARBALL"
+          sudo mv "ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl/rg" /usr/local/bin/rg
+          rm -rf "$RG_TARBALL" "ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl"
+          rg --version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          command: uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web
+
+      - name: Run e2e tests
+        # Verbatim from tests.yml's "e2e" job — same command, same scope,
+        # no skip/xfail/exclusion added to route around the known failure.
+        run: |
+          source .venv/bin/activate
+          python -m pytest tests/e2e/ -v --tb=short
+        env:
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""

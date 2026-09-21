@@ -795,6 +795,69 @@ class TestSharedBoardPaths:
 
 
 
+    def test_dispatcher_spawn_scrubs_stale_delegated_child_env_marker(
+        self, tmp_path, monkeypatch
+    ):
+        # Regression for the originally-reported bug fixed in PR #35: a
+        # dispatcher process that has, at any point in its life, spawned a
+        # delegate_task child can end up with HERMES_DELEGATED_CHILD_CONTEXT=1
+        # in its own os.environ afterwards (subprocess env inheritance).
+        # `env = dict(os.environ)` in _default_spawn would then carry that
+        # stale marker forward into every subsequent Kanban worker it
+        # spawns, permanently mis-marking a brand-new, genuinely
+        # dispatcher-owned worker as a delegated child and blocking it from
+        # Kanban mutation (agent/delegation_context.py::
+        # is_delegated_child_process_context /
+        # hermes_cli/kanban_db.py::_assert_not_delegated_child_mutation).
+        # _default_spawn must scrub the marker at the source rather than
+        # relying on is_delegated_child_process_context() to distrust its
+        # own env marker (that approach was the confused-deputy regression
+        # rejected in Maya's PR #35 review).
+        default_home = tmp_path / ".hermes"
+        default_home.mkdir()
+        self._set_home(monkeypatch, tmp_path, default_home)
+
+        from agent.delegation_context import DELEGATED_CHILD_ENV_MARKER
+
+        monkeypatch.setenv(DELEGATED_CHILD_ENV_MARKER, "1")
+
+        captured = {}
+
+        class _FakePopen:
+            def __init__(self, cmd, **kwargs):
+                captured["cmd"] = cmd
+                captured["env"] = kwargs.get("env", {})
+                self.pid = 4343
+
+        monkeypatch.setattr("subprocess.Popen", _FakePopen)
+
+        task = kb.Task(
+            id="t_scrub_stale_marker",
+            title="x",
+            body=None,
+            assignee="coder",
+            status="ready",
+            priority=0,
+            created_by=None,
+            created_at=0,
+            started_at=None,
+            completed_at=None,
+            workspace_kind="worktree",
+            workspace_path=str(tmp_path / "ws"),
+            claim_lock=None,
+            claim_expires=None,
+            tenant=None,
+            branch_name="wt/t_scrub_stale_marker",
+        )
+        kb._default_spawn(task, str(tmp_path / "ws"))
+
+        env = captured["env"]
+        assert DELEGATED_CHILD_ENV_MARKER not in env, (
+            "a freshly-dispatched Kanban worker's env must never inherit a "
+            "stale delegate_task lineage marker from the dispatcher's own "
+            "os.environ"
+        )
+
     def test_dispatcher_spawn_injects_kanban_paths_without_stale_session(
         self, tmp_path, monkeypatch
     ):
