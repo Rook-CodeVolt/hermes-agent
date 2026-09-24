@@ -35,6 +35,7 @@ import ctypes
 import ctypes.util
 import hashlib
 import json
+import logging
 import os
 import secrets
 import select
@@ -47,10 +48,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
+_log = logging.getLogger(__name__)
+
 # The child reads its identity token from this inherited descriptor.  The
 # *number* is not a secret and carries no authority: without the pipe's
 # contents it grants nothing.
 HANDSHAKE_FD_ENV = "HERMES_WORKER_HANDSHAKE_FD"
+
+# A dispatcher-owned worker's own ``terminal``-tool subprocess (the
+# documented "shell out to ``hermes kanban ...`` instead of a tool" fallback)
+# carries this env var when the SPAWNING process minted one for it.  Minting
+# happens in the parent, gated on ``get_bound() is not None`` at the exact
+# moment of spawn -- a decision made from this process's own ContextVar/
+# identity state, which a ``delegate_task`` child cannot influence via the
+# text of the shell command it asks the ``terminal`` tool to run.  The value
+# itself is an opaque token verified server-side (never trusted from env
+# alone); see :func:`mint_subprocess_credential` / :func:`kanban_db_identity`.
+SUBPROCESS_CREDENTIAL_ENV = "HERMES_WORKER_SUBPROCESS_CREDENTIAL"
+
+# Short: bounds how long a credential minted for one terminal-tool spawn
+# remains presentable, limiting the window for the documented residual risk
+# (the top-level agent could, in principle, persist the value itself and a
+# later delegate_task subprocess replay it within that window).
+SUBPROCESS_CREDENTIAL_TTL_SECONDS = 120
 
 # How long the child waits for the dispatcher to finish minting its row.
 # The dispatcher writes immediately after Popen returns, so this only ever
@@ -97,6 +117,13 @@ _BIND_ATTEMPTED = False
 _SUPPRESSED: ContextVar[bool] = ContextVar(
     "hermes_dispatcher_identity_suppressed", default=False
 )
+
+# Cache of the last-minted subprocess credential for THIS process's binding,
+# so a worker issuing many ``terminal`` commands per turn does not re-write
+# the Kanban DB on every single one. Keyed by identity_id so a rebind (tests
+# only; a real process binds once) cannot reuse a stale token across
+# identities. Refreshed once fewer than a third of the TTL remains.
+_SUBPROCESS_CREDENTIAL_CACHE: tuple[int, str, int] | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -509,9 +536,10 @@ def exit_suppressed(token: Token[bool]) -> None:
 
 def reset_for_tests() -> None:
     """Clear the process binding.  Test-support only."""
-    global _BOUND, _BIND_ATTEMPTED
+    global _BOUND, _BIND_ATTEMPTED, _SUBPROCESS_CREDENTIAL_CACHE
     _BOUND = None
     _BIND_ATTEMPTED = False
+    _SUBPROCESS_CREDENTIAL_CACHE = None
 
 
 def describe() -> dict[str, Any]:
@@ -527,3 +555,176 @@ def describe() -> dict[str, Any]:
         "worker_pid": identity.worker_pid,
         "expires_at": identity.expires_at,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Subprocess credentials: proving a worker's OWN terminal-tool shell-out
+# --------------------------------------------------------------------------- #
+
+def mint_subprocess_credential(
+    *, ttl_seconds: int = SUBPROCESS_CREDENTIAL_TTL_SECONDS
+) -> str | None:
+    """Mint (or reuse a still-fresh cached) short-lived, DB-verified token for
+    a subprocess this worker is about to spawn, or ``None`` when this call is
+    not entitled to one.
+
+    Callers MUST call this at the moment of spawn (not cache the result
+    themselves across turns) and gate injecting it into the child's env on
+    getting a non-``None`` return. ``None`` covers every reason a credential
+    must not be issued: no live binding at all (ordinary session, cron job,
+    or -- critically -- a ``delegate_task`` child, whose whole execution runs
+    with :func:`get_bound` suppressed regardless of what shell text it asks
+    the ``terminal`` tool to run), or a binding that no longer revalidates
+    (stale run, moved workspace, expired token).
+
+    The minted token is unrelated to the one-time handshake token: it is
+    reusable (not CAS-consumed) so one worker can authorise many terminal
+    calls, and it is bound to worker_pid + kernel process-start rather than
+    to any single child PID, so the *worker's own* subsequent descendants
+    (including further forks inside one shell command) can all present it.
+    """
+    global _SUBPROCESS_CREDENTIAL_CACHE
+
+    identity = get_bound()
+    if identity is None:
+        return None
+    if revalidate(identity) is not None:
+        return None
+
+    now = int(time.time())
+    cached = _SUBPROCESS_CREDENTIAL_CACHE
+    if cached is not None:
+        cached_identity_id, cached_token, cached_expires_at = cached
+        if (
+            cached_identity_id == identity.identity_id
+            and cached_expires_at - now > ttl_seconds // 3
+        ):
+            return cached_token
+
+    from hermes_cli import kanban_db_connect, kanban_db_identity
+
+    token = new_token()
+    expires_at = now + int(ttl_seconds)
+    try:
+        with kanban_db_connect.connect_closing(db_path=Path(identity.db_path)) as conn:
+            kanban_db_identity.purge_expired_subprocess_credentials(conn)
+            kanban_db_identity.issue_subprocess_credential(
+                conn,
+                task_id=identity.task_id,
+                run_id=identity.run_id,
+                workspace_path=str(identity.workspace),
+                worker_pid=identity.worker_pid,
+                proc_start=identity.proc_start,
+                token_sha256=token_digest(token),
+                ttl_seconds=ttl_seconds,
+            )
+    except Exception as exc:
+        _log.debug("could not mint worker subprocess credential: %s", exc)
+        return None
+    _SUBPROCESS_CREDENTIAL_CACHE = (identity.identity_id, token, expires_at)
+    return token
+
+
+def validate_subprocess_credential(
+    token: str,
+    conn: "Any | None" = None,
+    *,
+    task_id: "str | None" = None,
+    board: "str | None" = None,
+) -> bool:
+    """Whether *token* is a live, DB-recorded worker subprocess credential.
+
+    *conn* -- when the caller already holds a connection to the DB it is
+    about to write to (the normal ``write_txn`` case) -- is checked FIRST
+    and, when given, EXCLUSIVELY: :func:`hermes_cli.kanban_db_connect.connect_closing`
+    re-enters ``_init_if_needed``'s cross-process init lock, which is not
+    reentrant across separate file descriptors even within one process, so
+    opening a second connection here would risk deadlocking every guarded
+    write. More importantly, a caller that passes its own board's ``conn``
+    has already told us which board is authoritative for this call; probing
+    every OTHER known board's file after a miss there would let a credential
+    minted on board A validate against a completely unrelated board B just
+    because some third board C's DB file happens to contain a live row for
+    the same token digest (fixed regression: Maya's independent review of
+    b40b5669b0 reproduced exactly this using two real board files).
+
+    *board* -- for callers with no open ``conn`` of their own (board
+    administration: ``set_current_board``, ``clear_current_board``,
+    ``write_board_metadata``, ``remove_board``) but which DO have an exact
+    target board slug (the board being switched to / archived / deleted /
+    whose metadata is being written), this scopes the check to ONLY that
+    board's own DB file -- exactly the same "one authoritative board, no
+    fallback" behaviour as the ``conn is not None`` branch, just resolved
+    from a slug instead of an already-open connection. This closes the
+    cross-board admin-authority bypass Maya found in a fresh review of
+    d977234b54: a credential minted while working on board A must not
+    authorise ``remove_board``/``write_board_metadata``/etc. against an
+    unrelated board B just because board B's DB file happens to be probed.
+    A missing/unreadable target board file fails closed (no credential can
+    validate against a board that isn't there to hold one).
+
+    *conn is None and board is None* -- no caller in this codebase invokes
+    the check this way (every board-admin call site now supplies ``board``;
+    every task-mutating call site supplies ``conn``). There is no
+    remaining legitimate use for a global multi-board probe, so this
+    combination now fails closed rather than scanning every known board's
+    DB file for a matching token -- that scan was the exact mechanism of
+    the cross-board admin-authority bypass this fixes.
+
+    *task_id* -- when the caller can name the single task this call is
+    about to mutate, the credential row must have been minted for that
+    EXACT task, closing the cross-task replay Maya reproduced (a credential
+    minted for worker-on-task-A's own subprocess otherwise authorised
+    mutating an unrelated task B on the same board). Callers with no single
+    mutation target (task creation, per-board administration, batch
+    dispatcher sweeps) pass ``task_id=None`` and get the token+expiry(+board)
+    check only -- this is strictly narrower than a plain bearer token, never
+    wider than before this fix.
+    """
+    if not isinstance(token, str) or not token.strip():
+        return False
+
+    from hermes_cli import kanban_db, kanban_db_identity
+
+    digest = token_digest(token)
+
+    if conn is not None:
+        try:
+            row = kanban_db_identity.find_valid_subprocess_credential(conn, digest, task_id=task_id)
+        except Exception as exc:
+            _log.debug("could not validate worker subprocess credential against the open connection: %s", exc)
+            return False
+        return row is not None
+
+    if board is not None:
+        import sqlite3
+
+        try:
+            # NOT kanban_db.kanban_db_path(board=board): that resolver checks
+            # HERMES_KANBAN_DB FIRST, unconditionally, before ever consulting
+            # `board` -- and every real dispatcher worker has that env var
+            # pinned to its OWN board, inherited unmodified by every
+            # non-delegated terminal-tool subprocess it spawns. That made
+            # this scoping a no-op in exactly the scenario it targets (Maya's
+            # finding reviewing 1bdc8403c9). board_db_path_no_env_override
+            # computes the target board's DB path purely from the slug,
+            # ignoring HERMES_KANBAN_DB/HERMES_KANBAN_BOARD/ambient state.
+            path = kanban_db.board_db_path_no_env_override(board)
+        except Exception as exc:
+            _log.debug("could not resolve target board %r for subprocess credential check: %s", board, exc)
+            return False
+        if not path.is_file():
+            return False
+        try:
+            probe = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            probe.row_factory = sqlite3.Row
+            try:
+                row = kanban_db_identity.find_valid_subprocess_credential(probe, digest, task_id=task_id)
+            finally:
+                probe.close()
+        except Exception as exc:
+            _log.debug("could not validate worker subprocess credential against target board %r (%s): %s", board, path, exc)
+            return False
+        return row is not None
+
+    return False

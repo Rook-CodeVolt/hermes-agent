@@ -118,21 +118,153 @@ _IS_WINDOWS = sys.platform == "win32"
 KANBAN_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024  # one cap for dashboard, tools and CLI
 
 
-def _assert_not_delegated_child_mutation() -> None:
-    """Reject Kanban mutations from ``delegate_task`` child contexts.
+def _dispatcher_worker_ancestor_pids() -> set[int]:
+    """Return live ancestor PIDs, excluding this process.
 
-    The tool/CLI fast-fail guards are UX, not a trust boundary (a child can shell
-    out or import this module); the invariant lives here so every ``write_txn``
-    user and board-metadata mutator fails closed before touching durable state.
+    This is defence in depth for a CLI subprocess that deliberately strips the
+    delegated-child marker.  It is not the authority primitive: a detached /
+    re-parented process can escape ancestry, so dispatcher workers are authorised
+    only by ``agent.dispatcher_identity``'s one-time, process-bound capability.
     """
     try:
-        from agent.delegation_context import is_delegated_child_process_context
+        import psutil
 
-        delegated = is_delegated_child_process_context()
-    except Exception:
-        delegated = bool(os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"))
-    if delegated:
-        raise PermissionError("delegate_task child contexts cannot mutate Kanban tasks or boards")
+        return {int(parent.pid) for parent in psutil.Process().parents()}
+    except Exception as exc:
+        _log.debug("could not inspect process ancestry for Kanban mutation: %s", exc)
+        return set()
+
+
+def _candidate_kanban_dbs() -> list[Path]:
+    """Best-effort board DB inventory for ancestry checks without trusting env.
+
+    Delegated-child scrubbing intentionally removes HERMES_KANBAN_DB, but the
+    profile home (``HERMES_HOME``/``HERMES_KANBAN_HOME``) still resolves the
+    default and named-board databases correctly.  Deliberately NOT cwd-based:
+    every dispatcher worker's workspace lives under a directory literally
+    named ``workspaces`` by construction, so inferring a board path from cwd
+    would match an unrelated real board any time this runs from inside a
+    worker's own workspace (including this very check's own test suite),
+    turning an ordinary in-process mutation into a false-positive denial.
+    """
+    candidates: list[Path] = []
+    with contextlib.suppress(Exception):
+        candidates.append(kanban_db_path())
+    with contextlib.suppress(Exception):
+        candidates.extend(sorted(boards_root().glob("*/kanban.db")))
+    return list(dict.fromkeys(path.resolve() for path in candidates))
+
+
+def _descends_from_live_dispatcher_worker(conn: Optional[sqlite3.Connection] = None) -> bool:
+    """Whether this process descends from a worker PID recorded on any known board.
+
+    Ancestry closes the marker-stripping subprocess path, but is explicitly
+    bypassable by detaching/re-parenting and therefore never grants authority.
+    """
+    ancestors = _dispatcher_worker_ancestor_pids()
+    if not ancestors:
+        return False
+
+    def _matches(db: sqlite3.Connection) -> bool:
+        try:
+            rows = db.execute(
+                "SELECT worker_pid FROM tasks "
+                "WHERE status = 'running' AND worker_pid IS NOT NULL"
+            ).fetchall()
+            return any(int(row["worker_pid"]) in ancestors for row in rows)
+        except Exception:
+            return False
+
+    if conn is not None:
+        return _matches(conn)
+    for path in _candidate_kanban_dbs():
+        if not path.is_file():
+            continue
+        try:
+            probe = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            probe.row_factory = sqlite3.Row
+            try:
+                if _matches(probe):
+                    return True
+            finally:
+                probe.close()
+        except Exception:
+            continue
+    return False
+
+
+def _assert_not_delegated_child_mutation(
+    conn: Optional[sqlite3.Connection] = None, *, task_id: Optional[str] = None,
+    board: Optional[str] = None,
+) -> None:
+    """Reject Kanban mutation without dispatcher-owned process authority.
+
+    Ordinary interactive/operator processes remain able to administer Kanban.
+    A dispatcher worker, however, is authorised only by the unforgeable,
+    one-time capability delivered over its inherited handshake pipe and bound
+    to task/run/workspace/PID/process-start in ``agent.dispatcher_identity``,
+    OR by a short-lived subprocess credential that worker minted for its own
+    ``terminal``-tool child (``agent.dispatcher_identity.mint_subprocess_credential``,
+    which itself only ever succeeds while that binding is live). Descendants
+    inherit neither the consumed handshake token nor the in-process binding;
+    they must present the subprocess credential explicitly, and a
+    ``delegate_task`` child can never obtain one because minting reads this
+    process's own suppressed/absent binding, not anything the child's shell
+    command text can influence.
+
+    ``task_id``, when the caller can name the single task this mutation
+    targets, scopes subprocess-credential acceptance to a credential minted
+    for that EXACT task -- closing the cross-task bearer-token replay found
+    in commit b40b5669b0 (a credential minted for worker-on-task-A's own
+    subprocess otherwise authorised mutating an unrelated task B on the same
+    board). Callers with no single mutation target (board administration,
+    task creation) pass no ``task_id``.
+
+    ``board``, when the caller is a board-administration call site with no
+    ``conn`` of its own (``set_current_board``, ``clear_current_board``,
+    ``write_board_metadata``, ``remove_board``) but DOES have an exact
+    target board slug, scopes subprocess-credential acceptance to a
+    credential minted for that EXACT board -- closing the cross-board
+    admin-authority bypass Maya found in a fresh review of d977234b54 (a
+    credential minted on board A otherwise authorised ``remove_board``/etc.
+    against an unrelated board B, via the retained ``conn is None``
+    multi-board fallback). Every board-admin call site below now supplies
+    its own target slug; there is no remaining call site that supplies
+    neither ``conn`` nor ``board``, so that combination fails closed in
+    :func:`agent.dispatcher_identity.validate_subprocess_credential`.
+
+    The marker and process-ancestry checks are denial-only defence in depth.
+    The marker is forgeable/removable; ancestry is bypassable by detaching.
+    Neither can grant mutation authority.
+    """
+    denied = "delegate_task child contexts cannot mutate Kanban tasks or boards"
+    try:
+        from agent import delegation_context, dispatcher_identity
+
+        if delegation_context.is_delegated_child_process_context():
+            raise PermissionError(denied)
+        identity = dispatcher_identity.get_bound()
+        if identity is not None:
+            reason = dispatcher_identity.revalidate(identity)
+            if reason is not None:
+                raise PermissionError(f"dispatcher worker identity is no longer valid: {reason}")
+            return
+        credential = os.environ.get(dispatcher_identity.SUBPROCESS_CREDENTIAL_ENV)
+        if credential and dispatcher_identity.validate_subprocess_credential(
+            credential, conn, task_id=task_id, board=board
+        ):
+            return
+    except PermissionError:
+        raise
+    except Exception as exc:
+        # Identity machinery must never fail open for a process that still has
+        # explicit worker/delegate lineage in its environment.
+        _log.debug("could not validate dispatcher worker identity: %s", exc)
+        if os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT") or os.environ.get("HERMES_KANBAN_TASK"):
+            raise PermissionError(denied) from None
+
+    if _descends_from_live_dispatcher_worker(conn):
+        raise PermissionError(denied)
 
 
 def _fire_kanban_lifecycle_hook(event: str, task_id: str, **fields: Any) -> None:
@@ -435,7 +567,14 @@ def get_current_board() -> str:
 def set_current_board(slug: str) -> Path:
     """Persist ``slug`` as the active board; returns the file written. Does NOT
     check the board exists — callers do (so ``boards switch <typo>`` errors)."""
-    _assert_not_delegated_child_mutation()
+    # Scope the subprocess-credential check to the board being switched TO,
+    # tolerating an un-normalizable slug (the normalization/existence error
+    # itself is raised below by _require_slug, after the authority check).
+    try:
+        _target_board = _normalize_board_slug(slug)
+    except ValueError:
+        _target_board = None
+    _assert_not_delegated_child_mutation(board=_target_board)
     normed = _require_slug(slug)
     path = current_board_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -445,7 +584,8 @@ def set_current_board(slug: str) -> Path:
 
 def clear_current_board() -> None:
     """Remove ``<root>/kanban/current`` so the active board reverts to ``default``."""
-    _assert_not_delegated_child_mutation()
+    # Reverting to "default" is the exact effective target of this mutation.
+    _assert_not_delegated_child_mutation(board=DEFAULT_BOARD)
     with contextlib.suppress(FileNotFoundError):
         current_board_path().unlink()
 
@@ -491,6 +631,34 @@ def kanban_db_path(board: Optional[str] = None) -> Path:
     """``kanban.db`` path: ``HERMES_KANBAN_DB`` pins it (injected into workers);
     ``default`` -> ``<root>/kanban.db`` (back-compat), else the board dir."""
     return _board_path("HERMES_KANBAN_DB", board, ("kanban.db",), "kanban.db")
+
+
+def board_db_path_no_env_override(slug: str) -> Path:
+    """``kanban.db`` path for *slug*, resolved PURELY from the slug --
+    ``HERMES_KANBAN_DB`` / ``HERMES_KANBAN_BOARD`` and any ambient
+    current-board state are never consulted.
+
+    :func:`kanban_db_path` checks ``HERMES_KANBAN_DB`` FIRST, unconditionally,
+    before ever looking at its ``board`` argument. Every real dispatcher
+    worker has that env var pinned to ITS OWN board
+    (:func:`hermes_cli.kanban_db_dispatch._default_spawn`), and it is
+    inherited unmodified by every non-delegated ``terminal``-tool subprocess
+    that worker spawns. That makes ``kanban_db_path(board=X)`` a no-op for
+    any caller trying to scope to a *specific target* board X that differs
+    from the worker's own -- it silently resolves to the worker's own board
+    DB instead, in exactly the scenario (a worker's own terminal subprocess)
+    the scoping is meant to constrain. Use THIS resolver, never
+    ``kanban_db_path()``, for any authority/credential decision that must
+    pin to an exact target board regardless of the calling process's
+    environment (fixes the env-override bypass Maya found reviewing
+    1bdc8403c9: ``validate_subprocess_credential(..., board=X)``'s scoping
+    was decorative whenever ``HERMES_KANBAN_DB`` was set, which is always,
+    for a real worker).
+    """
+    normed = _require_slug(slug)
+    if normed == DEFAULT_BOARD:
+        return kanban_home() / "kanban.db"
+    return board_dir(normed) / "kanban.db"
 
 
 def workspaces_root(board: Optional[str] = None) -> Path:
@@ -565,8 +733,12 @@ def write_board_metadata(
     """Create/update ``board.json``; unmentioned fields are preserved, ``created_at``
     set on first write. ``project_id``/``default_workdir``: ``None`` = unchanged,
     "" = clear (``project_id`` is not validated here)."""
-    _assert_not_delegated_child_mutation()
-    slug = _slug_or_default(board)
+    try:
+        slug = _slug_or_default(board)
+    except ValueError:
+        _assert_not_delegated_child_mutation(board=None)
+        raise
+    _assert_not_delegated_child_mutation(board=slug)
     meta = read_board_metadata(slug)
     # db_path is derived on every read; never persist it into board.json.
     meta.pop("db_path", None)
@@ -634,7 +806,11 @@ def list_boards(*, include_archived: bool = True) -> list[dict]:
 def remove_board(slug: str, *, archive: bool = True) -> dict:
     """Archive (to ``boards/_archived/<slug>-<ts>/``) or delete a board;
     ``default`` cannot be removed. Returns ``{"slug", "action", "new_path"}``."""
-    _assert_not_delegated_child_mutation()
+    try:
+        _target_board = _normalize_board_slug(slug)
+    except ValueError:
+        _target_board = None
+    _assert_not_delegated_child_mutation(board=_target_board)
     normed = _require_slug(slug)
     if normed == DEFAULT_BOARD:
         raise ValueError("the 'default' board cannot be removed")
@@ -1059,6 +1235,27 @@ CREATE INDEX IF NOT EXISTS idx_runs_status           ON task_runs(status);
 CREATE INDEX IF NOT EXISTS idx_attachments_task      ON task_attachments(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_id);
 CREATE INDEX IF NOT EXISTS idx_worker_identities_task ON worker_identities(task_id, issued_at);
+
+-- A short-lived, non-consumed credential proving a subprocess descends from a
+-- *specific* dispatcher-worker invocation that positively minted it (never
+-- from a delegate_task/cron scope in the same OS process -- those always see
+-- ``dispatcher_identity.get_bound() is None`` and therefore mint nothing).
+-- Unlike ``worker_identities`` this is revalidated, not CAS-consumed: one
+-- terminal command may fork several descendants (compound shell lines), each
+-- of which must be able to present the same credential.
+CREATE TABLE IF NOT EXISTS worker_subprocess_credentials (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id        TEXT    NOT NULL,
+    run_id         INTEGER NOT NULL,
+    workspace_path TEXT    NOT NULL,
+    worker_pid     INTEGER NOT NULL,
+    proc_start     INTEGER NOT NULL,
+    token_sha256   TEXT    NOT NULL UNIQUE,
+    issued_at      INTEGER NOT NULL,
+    expires_at     INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_subproc_creds_task ON worker_subprocess_credentials(task_id, issued_at);
 """
 
 
@@ -1524,7 +1721,7 @@ def list_tasks(
 def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) -> bool:
     """Assign/reassign; raises RuntimeError while the task is running under a claim."""
     profile = _canonical_assignee(profile)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         row = conn.execute(
             "SELECT status, claim_lock, assignee FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
@@ -1570,7 +1767,7 @@ def _set_task_override(
 ) -> bool:
     """Per-task override write: refuse archived tasks, record ``event_kind``,
     then fire the task-updated observer AFTER commit (RFC #58548)."""
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         status = _task_status(conn, task_id)
         if status is None:
             return False
@@ -1599,7 +1796,7 @@ def set_reasoning_effort(conn: sqlite3.Connection, task_id: str, effort: Optiona
 def link_tasks(conn: sqlite3.Connection, parent_id: str, child_id: str) -> None:
     if parent_id == child_id:
         raise ValueError("a task cannot depend on itself")
-    with write_txn(conn):
+    with write_txn(conn, task_id=child_id):
         missing = _missing_task_ids(conn, [parent_id, child_id])
         if missing:
             raise ValueError(f"unknown task(s): {', '.join(missing)}")
@@ -1636,7 +1833,7 @@ def _would_cycle(conn: sqlite3.Connection, parent_id: str, child_id: str) -> boo
 
 
 def unlink_tasks(conn: sqlite3.Connection, parent_id: str, child_id: str) -> bool:
-    with write_txn(conn):
+    with write_txn(conn, task_id=child_id):
         cur = conn.execute(
             "DELETE FROM task_links WHERE parent_id = ? AND child_id = ?", (parent_id, child_id),
         )
@@ -1703,7 +1900,7 @@ def add_comment(conn: sqlite3.Connection, task_id: str, author: str, body: str) 
     now = int(time.time())
     # ``allow_nested=True``: graph builders (kanban_swarm blackboard seeding)
     # compose comment writes under one outer commit.
-    with write_txn(conn, allow_nested=True):
+    with write_txn(conn, allow_nested=True, task_id=task_id):
         _require_task(conn, task_id)
         cur = conn.execute(
             "INSERT INTO task_comments (task_id, author, body, created_at) "
@@ -1811,7 +2008,7 @@ def add_attachment(
     if not stored_path or not stored_path.strip():
         raise ValueError("attachment stored_path is required")
     now = int(time.time())
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         _require_task(conn, task_id)
         cur = conn.execute(
             "INSERT INTO task_attachments "
@@ -1837,7 +2034,10 @@ def get_attachment(conn: sqlite3.Connection, attachment_id: int) -> Optional[Att
 
 def delete_attachment(conn: sqlite3.Connection, attachment_id: int) -> Optional[Attachment]:
     """Delete the row (source of truth) and best-effort its blob; None when no row matched."""
-    with write_txn(conn):
+    att = get_attachment(conn, attachment_id)
+    if att is None:
+        return None
+    with write_txn(conn, task_id=att.task_id):
         att = get_attachment(conn, attachment_id)
         if att is None:
             return None
@@ -2163,7 +2363,7 @@ def claim_task(
     now = int(time.time())
     lock = claimer or _claimer_id()
     expires = now + _resolve_claim_ttl_seconds(ttl_seconds)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         # Single enforcement point: never ready -> running with an undone
         # parent, whichever writer set 'ready'. Demote to 'todo';
         # recompute_ready re-promotes when the parents finish.
@@ -2196,7 +2396,7 @@ def claim_review_task(
     now = int(time.time())
     lock = claimer or _claimer_id()
     expires = now + _resolve_claim_ttl_seconds(ttl_seconds)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         if not _parents_satisfied(conn, task_id):
             demoted = conn.execute(
                 "UPDATE tasks SET status = 'todo' "
@@ -2278,7 +2478,7 @@ def heartbeat_claim(
     """Extend a running claim; True if we still own it."""
     expires = int(time.time()) + _resolve_claim_ttl_seconds(ttl_seconds)
     lock = claimer or _claimer_id()
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         cur = conn.execute(
             "UPDATE tasks SET claim_expires = ? "
             "WHERE id = ? AND status = 'running' AND claim_lock = ?", (expires, task_id, lock),
@@ -2348,7 +2548,7 @@ def release_stale_claims(conn: sqlite3.Connection, *, signal_fn=None) -> int:
                 reason="ttl_expired_worker_alive",
             )
             continue
-        with write_txn(conn):
+        with write_txn(conn, task_id=row["id"]):
             retry_status = _retry_status_for_run(conn, row["id"])
             cur = conn.execute(
                 "UPDATE tasks SET status = ?, claim_lock = NULL, "
@@ -2402,7 +2602,7 @@ def _extend_live_stale_claim(conn: sqlite3.Connection, row: sqlite3.Row, now: in
     reclaiming (``claim_extended`` event). CAS on the same expired lock so a
     concurrent reclaimer wins cleanly."""
     new_expires = now + _resolve_claim_ttl_seconds()
-    with write_txn(conn):
+    with write_txn(conn, task_id=row["id"]):
         cur = conn.execute(
             "UPDATE tasks SET claim_expires = ? "
             "WHERE id = ? AND status = 'running' "
@@ -2442,7 +2642,7 @@ def reclaim_task(
         return False
     prev_lock = row["claim_lock"]
     termination = _terminate_reclaimed_worker(row["worker_pid"], prev_lock, signal_fn=signal_fn)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         retry_status = _retry_status_for_run(conn, task_id)
         cur = conn.execute(
             "UPDATE tasks SET status = ?, claim_lock = NULL, "
@@ -2575,7 +2775,7 @@ def complete_task(
         conn, task_id, metadata, summary=summary, result=result,
     )
     handoff_summary = summary if summary is not None else result
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         # Hard invariant even for human review approval: a parent may have
         # reopened while this task waited.
         if not _parents_satisfied(conn, task_id):
@@ -2647,7 +2847,7 @@ def _gate_created_cards(
         return []
     verified_cards, phantom_cards = _verify_created_cards(conn, task_id, created_cards)
     if phantom_cards:
-        with write_txn(conn):
+        with write_txn(conn, task_id=task_id):
             _append_event(
                 conn, task_id, "completion_blocked_hallucination",
                 {
@@ -2710,7 +2910,7 @@ def _flag_phantom_prose_refs(
         return
     phantom_refs = [p for p in _scan_prose_for_phantom_ids(conn, scan_text) if p not in set(verified_cards)]
     if phantom_refs:
-        with write_txn(conn):
+        with write_txn(conn, task_id=task_id):
             _append_event(
                 conn, task_id, "suspected_hallucinated_references",
                 {"phantom_refs": phantom_refs, "source": "completion_summary"}, run_id=run_id,
@@ -2883,7 +3083,7 @@ def edit_completed_task_result(
 ) -> bool:
     """Backfill the user-visible result for an already completed task."""
     handoff_summary = summary if summary is not None else result
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         if _task_status(conn, task_id) != "done":
             return False
         conn.execute("UPDATE tasks SET result = ? WHERE id = ?", (result, task_id))
@@ -2930,7 +3130,7 @@ def block_task(
     so a forever-flaky task escalates. True on any transition."""
     if kind is not None and kind not in VALID_BLOCK_KINDS:
         raise ValueError(f"block kind must be one of {sorted(VALID_BLOCK_KINDS)} or None")
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         cur_row = conn.execute(
             "SELECT status, block_kind, block_recurrences FROM tasks WHERE id = ?", (task_id,),
         ).fetchone()
@@ -3031,7 +3231,7 @@ def request_review(
 
     summary = redact_review_value(summary)
     metadata = redact_review_value(metadata)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         if not _parents_satisfied(conn, task_id):
             return _ret(False, "parent dependencies are not satisfied")
         trow = conn.execute(
@@ -3134,7 +3334,7 @@ def request_changes(
     if not reason:
         return False, "reason is required"
 
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         task_row = conn.execute(
             "SELECT status, assignee, current_run_id FROM tasks WHERE id = ?", (task_id,),
         ).fetchone()
@@ -3227,7 +3427,7 @@ def promote_task(
     if dry_run:
         return True, None
 
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         upd = conn.execute(
             "UPDATE tasks SET status = 'ready' "
             "WHERE id = ? AND status IN ('todo', 'blocked')", (task_id,),
@@ -3275,7 +3475,7 @@ def unblock_task(conn: sqlite3.Connection, task_id: str) -> bool:
     """``blocked``/``scheduled`` -> its resumable phase (parent re-gated; ``review``
     when that is where it left off), closing any leaked run first."""
     now = int(time.time())
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         resume_status = (
             _resume_status_from_events(conn, task_id)
             if _task_status(conn, task_id) == "blocked"
@@ -3321,7 +3521,7 @@ def reopen_review_task(conn: sqlite3.Connection, task_id: str) -> bool:
     Preserves ``consecutive_failures`` and the block loop counter (review is
     not a block; only :func:`complete_task` clears them)."""
     now = int(time.time())
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         _reclaim_dangling_run(
             conn, task_id, statuses=("review",), now=now,
             note="invariant recovery on review reopen",
@@ -3374,7 +3574,7 @@ def invalidate_descendants_for_parent_reopen(
     now = int(time.time())
     invalidated: list[dict[str, Any]] = []
     terminations: list[tuple[Optional[int], Optional[str]]] = []
-    with write_txn(conn, allow_nested=True):
+    with write_txn(conn, allow_nested=True, task_id=task_id):
         rows = conn.execute(
             """
             WITH RECURSIVE descendants(id) AS (
@@ -3457,7 +3657,7 @@ def specify_triage_task(
     if title is not None and not title.strip():
         raise ValueError("title cannot be blank")
     assignee = _canonical_assignee(assignee)
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         existing = conn.execute(
             "SELECT title, body, assignee FROM tasks WHERE id = ? AND status = 'triage'",
             (task_id,),
@@ -3560,7 +3760,7 @@ def decompose_triage_task(
     # ONE txn so the fan-out is atomic; helpers that open their own write_txn
     # (create_task, link_tasks, add_comment) must not be called in here.
     now = int(time.time())
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         root_row = conn.execute(
             "SELECT id, status, tenant, workspace_kind, workspace_path "
             "FROM tasks WHERE id = ?", (task_id,),
@@ -3651,7 +3851,7 @@ def _insert_decomposed_child(
 
 
 def archive_task(conn: sqlite3.Connection, task_id: str) -> bool:
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         cur = conn.execute(
             "UPDATE tasks SET status = 'archived', "
             "    claim_lock = NULL, claim_expires = NULL, worker_pid = NULL "
@@ -3682,7 +3882,7 @@ def _delete_task_relations(conn: sqlite3.Connection, task_id: str) -> None:
 def delete_archived_task(conn: sqlite3.Connection, task_id: str) -> bool:
     """Hard-delete an ARCHIVED task (+ related rows); anything else must be
     archived first so data loss takes two deliberate actions."""
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         if _task_status(conn, task_id) != "archived":
             return False
         _delete_task_relations(conn, task_id)
@@ -3692,7 +3892,7 @@ def delete_archived_task(conn: sqlite3.Connection, task_id: str) -> bool:
 
 def delete_task(conn: sqlite3.Connection, task_id: str) -> bool:
     """Hard-delete a task and its related rows in one txn; False when not found."""
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         if cur.rowcount != 1:
             return False
@@ -3707,7 +3907,7 @@ def schedule_task(
 ) -> bool:
     """Park in ``scheduled`` (waiting on time, not a human; not dispatchable)
     until ``unblock_task`` re-gates it."""
-    with write_txn(conn):
+    with write_txn(conn, task_id=task_id):
         params: list[Any] = [task_id]
         sql = """
             UPDATE tasks

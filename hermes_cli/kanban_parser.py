@@ -56,8 +56,6 @@ def _triage_sweep_args(verb: str, Verb: str, noun: str):
         _arg("task_id", nargs="?", help=f"Task id to {verb} (required unless --all is given)"),
         _arg("--all", dest="all_triage", action="store_true", help=f"{Verb} every task currently in the triage column"),
         _arg("--tenant", help="When used with --all, restrict the sweep to this tenant"),
-        _arg("--author",
-             help=f"Author name recorded on the audit comment (default: $HERMES_PROFILE or '{noun}')"),
         _json_flag(help="Emit one JSON object per task on stdout"),
     )
 
@@ -168,7 +166,6 @@ _SPECS = [
              help="Per-task runtime cap. Accepts seconds (300) or durations (90s, "
                   "30m, 2h, 1d). When exceeded, the dispatcher SIGTERMs (then "
                   "SIGKILLs) the worker and re-queues the task."),
-        _arg("--created-by", default="user", help="Author name recorded on the task (default: user)"),
         _arg("--skill", action="append", default=[], dest="skills",
              help="Skill to force-load into the worker (repeatable). The kanban "
                   "lifecycle is already injected automatically. Example: --skill "
@@ -208,7 +205,6 @@ _SPECS = [
         _arg("--synthesizer", required=True, help="Synthesizer/writer profile"),
         _TENANT,
         _PRIORITY,
-        _arg("--created-by", help="Creator/anchor profile"),
         _arg("--idempotency-key", help="Dedup key for the root card"),
         _json_flag(help="Emit JSON output"),
     ], help="Create a Kanban Swarm v1 graph (parallel workers → verifier → synthesizer)"),
@@ -261,7 +257,6 @@ _SPECS = [
     _cmd("comment", [
         _TASK_ID,
         _arg("text", nargs="+", help="Comment body"),
-        _arg("--author", help="Author name (default: $HERMES_PROFILE or 'user')"),
         _arg("--max-len", type=int, help="Trim the stored comment body to this many characters"),
     ], help="Append a comment"),
     _cmd("attach", [
@@ -269,7 +264,6 @@ _SPECS = [
         _arg("path", help="Path to the local file to attach"),
         _arg("--content-type", help="MIME type (default: guessed from the file extension)"),
         _arg("--name", help="Stored filename (default: the source file's basename)"),
-        _arg("--author", help="uploaded_by label (default: $HERMES_PROFILE or 'user')"),
     ], help="Attach a local file to a task"),
     _cmd("attachments", [_TASK_ID, _json_flag()], help="List a task's attachments"),
     _cmd("attach-rm", [_arg("attachment_id", type=int)], help="Delete an attachment by id"),
