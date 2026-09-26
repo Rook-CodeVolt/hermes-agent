@@ -12355,19 +12355,36 @@ def _session_latest_descendant(session_id: str, db):
         or getattr(db, "_connection", None)
     )
 
-    rows = []
-    if conn is not None:
-        raw_rows = conn.execute(
-            """
+    # Deferred import (matches this file's existing lazy-import convention for
+    # hermes_state / hermes_state_common — avoids a module-level dependency
+    # edge for a helper only this function needs).
+    from hermes_state_common import _RESET_CHILD_SQL
+
+    _reset_child_sql = _RESET_CHILD_SQL.format(a="s")
+    _descendants_sql = f"""
             WITH RECURSIVE descendants(id, parent_session_id, started_at) AS (
                 SELECT id, parent_session_id, started_at FROM sessions WHERE id = ?
                 UNION
                 SELECT s.id, s.parent_session_id, s.started_at
                 FROM sessions s
                 JOIN descendants d ON s.parent_session_id = d.id
+                -- Continuation edges only (same predicate as the session list's chain
+                -- CTE): a subagent run (`_delegate_from`), a /branch fork
+                -- (`_branched_from`), a /new reset child, or a tool-owned row is its
+                -- own conversation, and resuming INTO one parks the user's chat in a
+                -- row the sidebar never lists (upstream #115092 / PR #117013).
+                WHERE json_extract(COALESCE(s.model_config, '{{}}'), '$._delegate_from') IS NULL
+                  AND json_extract(COALESCE(s.model_config, '{{}}'), '$._branched_from') IS NULL
+                  AND NOT ({_reset_child_sql})
+                  AND COALESCE(s.source, '') != 'tool'
             )
             SELECT id, parent_session_id, started_at FROM descendants
-            """,
+            """
+
+    rows = []
+    if conn is not None:
+        raw_rows = conn.execute(
+            _descendants_sql,
             (sid,),
         ).fetchall()
         for row in raw_rows:
